@@ -417,7 +417,7 @@ class AST2IRVisitor(ast.NodeVisitor):
     def __call__(self, ast_root: ast.AST):
         assert (
             isinstance(ast_root, ast.Module)
-            and ast_root._fields == ("body",)
+            and ast_root._fields in (("body",), ("body", "type_ignores",))
             and len(ast_root.body) == 1
             and isinstance(ast_root.body[0], ast.FunctionDef)
         )
