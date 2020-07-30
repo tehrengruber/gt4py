@@ -33,7 +33,7 @@ from gt4py.utils.attrib import (
 )
 
 
-class CartesianSpace:
+class CartesianIndexSpace:
     @enum.unique
     class Axis(enum.Enum):
         I = 0
@@ -46,6 +46,40 @@ class CartesianSpace:
     names = [ax.name for ax in Axis]
     ndims = len(names)
 
+class LocationType(enum.Enum):
+    Vertex = 0
+    Edge = 1
+    Cell = 2
+
+class MeshIndexSpace:
+    @enum.unique
+    class Axis(enum.Enum):
+        Vertical = 0
+        Vertex = 1 # TODO: rename to differentiate between axes and locations?
+        Edge = 2
+        Cell = 3
+
+        def __str__(self):
+            return self.name
+
+    @staticmethod
+    def axis_from_location_type(location):
+        return {
+            LocationType.Vertex: MeshIndexSpace.Axis.Vertex,
+            LocationType.Edge: MeshIndexSpace.Axis.Edge,
+            LocationType.Cell: MeshIndexSpace.Axis.Cell,
+        }[location]
+
+    @staticmethod
+    def location_type_from_axes(location):
+        return {
+            MeshIndexSpace.Axis.Vertex: LocationType.Vertex,
+            MeshIndexSpace.Axis.Edge: LocationType.Edge,
+            MeshIndexSpace.Axis.Cell: LocationType.Cell,
+        }[location]
+
+    names = [ax.name for ax in Axis]
+    ndims = len(names)
 
 class NumericTuple(tuple):
     """N-dimensional like vector implemented as a subclass of the tuple builtin."""
@@ -59,7 +93,7 @@ class NumericTuple(tuple):
         assert ndims[0] <= len(value) <= ndims[1]
 
     @classmethod
-    def is_valid(cls, value, *, ndims=(1, CartesianSpace.ndims)):
+    def is_valid(cls, value, *, ndims=(1, CartesianIndexSpace.ndims)):
         if isinstance(ndims, numbers.Integral):
             ndims = tuple([ndims] * 2)
         elif not isinstance(ndims, collections.abc.Sequence) or len(ndims) != 2:
@@ -73,15 +107,15 @@ class NumericTuple(tuple):
             return True
 
     @classmethod
-    def zeros(cls, ndims=CartesianSpace.ndims):
+    def zeros(cls, ndims=CartesianIndexSpace.ndims):
         return cls([0] * ndims, ndims=(ndims, ndims))
 
     @classmethod
-    def ones(cls, ndims=CartesianSpace.ndims):
+    def ones(cls, ndims=CartesianIndexSpace.ndims):
         return cls([1] * ndims, ndims=(ndims, ndims))
 
     @classmethod
-    def from_k(cls, value, ndims=CartesianSpace.ndims):
+    def from_k(cls, value, ndims=CartesianIndexSpace.ndims):
         return cls([value] * ndims, ndims=(ndims, ndims))
 
     @classmethod
@@ -109,7 +143,7 @@ class NumericTuple(tuple):
 
     def __getattr__(self, name):
         try:
-            value = self[CartesianSpace.Axis.symbols.index(name)]
+            value = self[CartesianIndexSpace.Axis.symbols.index(name)]
         except (IndexError, ValueError) as e:
             raise AttributeError(
                 "'{}' object has no attribute '{}'".format(self.__class__.__name__, name)
@@ -118,7 +152,7 @@ class NumericTuple(tuple):
             return value
 
     def __getitem__(self, item):
-        if isinstance(item, CartesianSpace.Axis):
+        if isinstance(item, CartesianIndexSpace.Axis):
             item = item.value
         return tuple.__getitem__(self, item)
 
@@ -192,7 +226,7 @@ class NumericTuple(tuple):
     @property
     def __dict__(self):
         """Ordered mapping from axes names to their values."""
-        return collections.OrderedDict(zip(CartesianSpace.Axis.symbols, self))
+        return collections.OrderedDict(zip(CartesianIndexSpace.Axis.symbols, self))
 
     @property
     def ndims(self):
@@ -268,7 +302,7 @@ class FrameTuple(tuple):
         assert ndims[0] <= len(value) <= ndims[1]
 
     @classmethod
-    def is_valid(cls, value, *, ndims=(1, CartesianSpace.ndims)):
+    def is_valid(cls, value, *, ndims=(1, CartesianIndexSpace.ndims)):
         if isinstance(ndims, int):
             ndims = tuple([ndims] * 2)
         elif not isinstance(ndims, collections.abc.Sequence) or len(ndims) != 2:
@@ -282,15 +316,15 @@ class FrameTuple(tuple):
             return True
 
     @classmethod
-    def zeros(cls, ndims=CartesianSpace.ndims):
+    def zeros(cls, ndims=CartesianIndexSpace.ndims):
         return cls([(0, 0)] * ndims, ndims=(ndims, ndims))
 
     @classmethod
-    def ones(cls, ndims=CartesianSpace.ndims):
+    def ones(cls, ndims=CartesianIndexSpace.ndims):
         return cls([(1, 1)] * ndims, ndims=(ndims, ndims))
 
     @classmethod
-    def from_k(cls, value_pair, ndims=CartesianSpace.ndims):
+    def from_k(cls, value_pair, ndims=CartesianIndexSpace.ndims):
         return cls([value_pair] * ndims, ndims=(ndims, ndims))
 
     @classmethod
@@ -310,7 +344,7 @@ class FrameTuple(tuple):
 
     def __getattr__(self, name):
         try:
-            value = self[CartesianSpace.Axis.symbols.index(name)]
+            value = self[CartesianIndexSpace.Axis.symbols.index(name)]
         except (IndexError, ValueError) as e:
             raise AttributeError(
                 "'{}' object has no attribute '{}'".format(self.__class__.__name__, name)
@@ -319,7 +353,7 @@ class FrameTuple(tuple):
             return value
 
     def __getitem__(self, item):
-        if isinstance(item, CartesianSpace.Axis):
+        if isinstance(item, CartesianIndexSpace.Axis):
             item = item.value
         return tuple.__getitem__(self, item)
 
@@ -386,7 +420,7 @@ class FrameTuple(tuple):
     @property
     def __dict__(self):
         """Ordered mapping from axes names to their values."""
-        return collections.OrderedDict(zip(CartesianSpace.Axis.symbols, self))
+        return collections.OrderedDict(zip(CartesianIndexSpace.Axis.symbols, self))
 
     @property
     def ndims(self):
@@ -516,7 +550,7 @@ class Extent(FrameTuple):
         assert ndims[0] <= len(value) <= ndims[1]
 
     @classmethod
-    def empty(cls, ndims=CartesianSpace.ndims):
+    def empty(cls, ndims=CartesianIndexSpace.ndims):
         return cls([(None, None)] * ndims)
 
     @classmethod
@@ -617,7 +651,7 @@ class CenteredExtent(Extent):
         assert ndims[0] <= len(value) <= ndims[1]
 
     @classmethod
-    def empty(cls, ndims=CartesianSpace.ndims):
+    def empty(cls, ndims=CartesianIndexSpace.ndims):
         return cls.zeros(ndims)
 
     @classmethod

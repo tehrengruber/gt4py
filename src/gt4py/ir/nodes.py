@@ -50,6 +50,10 @@ NativeFunction enumeration (:class:`NativeFunction`)
     [`ABS`, `MOD`, `SIN`, `COS`, `TAN`, `ARCSIN`, `ARCCOS`, `ARCTAN`, `SQRT`, `EXP`, `LOG`,
     `ISFINITE`, `ISINF`, `ISNAN`, `FLOOR`, `CEIL`, `TRUNC`]
 
+ReductionOperator enumeration (:class:`ReductionOperator`)
+    Neighbor Reduction operators
+    [`MIN`, `MAX`, `PRODUCT`, `SUM`]
+
 AccessIntent enumeration (:class:`AccessIntent`)
     Access permissions
     [`READ_ONLY`, `READ_WRITE`]
@@ -76,25 +80,42 @@ Extent (:class:`gt4py.definitions.Extent`)
 Definition IR
 -------------
 
-All nodes have an optional attribute `loc` [`Location(line: int, column: int, scope: str)`]
+All nodes have an optional attribute `loc` [`SourceLocation(line: int, column: int, scope: str)`]
 storing a reference to the piece of source code which originated the node.
 
  ::
 
     Axis(name: str)
 
-    Domain(parallel_axes: List[Axis], [sequential_axis: Axis, data_axes: List[Axis]])
-        # LatLonGrids -> parallel_axes: ["I", "J], sequential_axis: "K"
+    Domain(name: str, type: str, index_spaces: attribute(of=IndexSpace))
+        # LatLonGrids -> parallel_axes: ["I", "J"], sequential_axis: "K"
 
     Literal     = ScalarLiteral(value: Any (should match DataType), data_type: DataType)
                 | BuiltinLiteral(value: Builtin)
 
     Ref         = VarRef(name: str, [index: int])
-                | FieldRef(name: str, offset: Dict[str, int])
+                | FieldRef(name: str, index: List[Union[int, LocationRef]]) # each
+                | FieldRef(name: str, index: Dict[str, int]) # TODO: change from offset to index
+
+    # Todo: Transform Expr into something like ComputationBlock by annotating the LocationRef
+    NeighborMap(expr: Expr, neighbors: NeighborSelector)
+
+    NeighborSelector(location : LocationDecl, chain : List[Location])
+
+    NeighborReduction(local_field: NeighborMap, op: BinaryOperator)
+
+    # Todo: Transform ref into location
+    LocationRef(name: str)
+
+    LocationDecl(name: str, location: Location)
+
+    # Generalization
+    # Map(expr: Expr, collection: List[Expr])
+    #[field[e, (v, k)] for v in vertices(e), k in [-1, 0, 1]]
 
     NativeFuncCall(func: NativeFunction, args: List[Expr])
 
-    Expr        = Literal | Ref | NativeFuncCall | CompositeExpr | InvalidBranch
+    Expr        = Literal | Ref | NativeFuncCall | NeighborReduction | CompositeExpr | InvalidBranch
 
     CompositeExpr   = UnaryOpExpr(op: UnaryOperator, arg: Expr)
                     | BinOpExpr(op: BinaryOperator, lhs: Expr, rhs: Expr)
@@ -104,6 +125,7 @@ storing a reference to the piece of source code which originated the node.
                             is_api: bool, layout_id: str)
                 | VarDecl(name: str, data_type: DataType, length: int,
                           is_api: bool, [init: Literal])
+                | LocationDecl(name: str, location: Location)
 
     BlockStmt(stmts: List[Statement])
 
@@ -122,16 +144,20 @@ storing a reference to the piece of source code which originated the node.
         # start is included
         # end is excluded
 
-    ComputationBlock(interval: AxisInterval, order: IterationOrder, body: BlockStmt)
+    ComputationBlock(index_space: IndexSpace, body: BlockStmt, order: IterationOrder)
+
+    IndexSpace(axes: List[Axis], vertical_interval: AxisInterval)
+
+    # TODO: LocalIndexSpace?
 
     ArgumentInfo(name: str, is_keyword: bool, [default: Any])
 
     StencilDefinition(name: str,
                       domain: Domain,
                       api_signature: List[ArgumentInfo],
-                      domain: Domain,
                       api_fields: List[FieldDecl],
                       parameters: List[VarDecl],
+                      locations: List[LocationDecls] # todo: remove
                       computations: List[ComputationBlock],
                       [externals: Dict[str, Any], sources: Dict[str, str]])
 
@@ -176,7 +202,7 @@ import operator
 
 import numpy as np
 
-from gt4py.definitions import Extent, Index, CartesianSpace
+from gt4py.definitions import Extent, Index, CartesianIndexSpace, MeshIndexSpace, LocationType
 from gt4py import utils as gt_utils
 from gt4py.utils.attrib import (
     attribute,
@@ -201,7 +227,7 @@ class Node:
 
 
 @attribclass
-class Location(Node):
+class SourceLocation(Node):
     line = attribute(of=int)
     column = attribute(of=int)
     scope = attribute(of=str, default="<source>")
@@ -216,6 +242,24 @@ class Location(Node):
 class Axis(Node):
     name = attribute(of=str)
 
+@attribclass
+class IndexSpace(Node):
+    parallel_axes = attribute(of=ListOf[Axis])
+    sequential_axis = attribute(of=Axis, optional=True)
+    data_axes = attribute(of=ListOf[Axis], optional=True)
+
+    @property
+    def axes(self):
+        result = list(self.parallel_axes)
+        if self.sequential_axis:
+            result.append(self.sequential_axis)
+        if self.data_axes:
+            result.extend(self.data_axes)
+        return result
+
+    @property
+    def axes_names(self):
+        return [ax.name for ax in self.axes]
 
 @attribclass
 class Domain(Node):
@@ -224,13 +268,20 @@ class Domain(Node):
     data_axes = attribute(of=ListOf[Axis], optional=True)
 
     @classmethod
-    def LatLonGrid(cls):
+    def CartesianGrid(cls):
         return cls(
             parallel_axes=[
-                Axis(name=CartesianSpace.Axis.I.name),
-                Axis(name=CartesianSpace.Axis.J.name),
+                Axis(name=CartesianIndexSpace.Axis.I.name),
+                Axis(name=CartesianIndexSpace.Axis.J.name),
             ],
-            sequential_axis=Axis(name=CartesianSpace.Axis.K.name),
+            sequential_axis=Axis(name=CartesianIndexSpace.Axis.K.name),
+        )
+
+    @classmethod
+    def Mesh(cls):
+        return cls(
+            parallel_axes=[Axis(name=MeshIndexSpace.axis_from_location_type(LocationType.Vertex).name)],
+            sequential_axis=Axis(name=MeshIndexSpace.Axis.Vertical.name)
         )
 
     @property
@@ -245,6 +296,72 @@ class Domain(Node):
     @property
     def axes_names(self):
         return [ax.name for ax in self.axes]
+
+    @property
+    def ndims(self):
+        return self.domain_ndims + self.data_ndims
+
+    @property
+    def domain_ndims(self):
+        return len(self.parallel_axes) + (1 if self.sequential_axis else 0)
+
+    @property
+    def data_ndims(self):
+        return len(self.data_axes) if self.data_axes else 0
+
+    def index(self, axis):
+        if isinstance(axis, Axis):
+            axis = axis.name
+        assert isinstance(axis, str)
+        return self.axes_names.index(axis)
+
+@attribclass
+class DomainNew(Node):
+    name = attribute(of=str) # not used right now
+    index_spaces = attribute(of=ListOf[IndexSpace])
+
+    @classmethod
+    def CartesianGrid(cls):
+        return cls(
+            name="CartesianGrid",
+            index_spaces=[IndexSpace(parallel_axes=[
+                    Axis(name=CartesianIndexSpace.Axis.I.name),
+                    Axis(name=CartesianIndexSpace.Axis.J.name),
+                ],
+                sequential_axis=Axis(name=CartesianIndexSpace.Axis.K.name))]
+        )
+
+    @classmethod
+    def Mesh(cls):
+        vertex_index_space = IndexSpace(
+            parallel_axes=[Axis(name=MeshIndexSpace.axis_from_location(LocationType.Vertex).name)],
+            sequential_axis=Axis(name=MeshIndexSpace.Axes.Vertical)
+        )
+        edge_index_space = IndexSpace(
+            parallel_axes=[Axis(name=MeshIndexSpace.axis_from_location(LocationType.Edge).name)],
+            sequential_axis=Axis(name=MeshIndexSpace.Axes.Vertical)
+        )
+        cell_index_space = IndexSpace(
+            parallel_axes=[Axis(name=MeshIndexSpace.axis_from_location(LocationType.Cell).name)],
+            sequential_axis=Axis(name=MeshIndexSpace.Axes.Vertical)
+        )
+
+        return cls(
+            name="Mesh",
+            index_spaces=[vertex_index_space, edge_index_space, cell_index_space]
+        )
+
+    def index_space(self, location):
+        pass
+        # todo
+
+    @property
+    def axes(self):
+        raise "Moved to IndexSpace node"
+
+    @property
+    def axes_names(self):
+        raise "Moved to IndexSpace node"
 
     @property
     def ndims(self):
@@ -294,7 +411,6 @@ class AccessIntent(enum.Enum):
 
     def __str__(self):
         return self.name
-
 
 @enum.unique
 class DataType(enum.Enum):
@@ -362,7 +478,7 @@ class InvalidBranch(Expr):
 class ScalarLiteral(Literal):
     value = attribute(of=Any)  # Potentially an array of numeric structs
     data_type = attribute(of=DataType)
-    loc = attribute(of=Location, optional=True)
+    loc = attribute(of=SourceLocation, optional=True)
 
 
 # @attribclass
@@ -377,7 +493,7 @@ class ScalarLiteral(Literal):
 @attribclass
 class BuiltinLiteral(Literal):
     value = attribute(of=Builtin)
-    loc = attribute(of=Location, optional=True)
+    loc = attribute(of=SourceLocation, optional=True)
 
 
 class Ref(Expr):
@@ -388,14 +504,14 @@ class Ref(Expr):
 class VarRef(Ref):
     name = attribute(of=str)
     index = attribute(of=int, optional=True)
-    loc = attribute(of=Location, optional=True)
+    loc = attribute(of=SourceLocation, optional=True)
 
 
 @attribclass
 class FieldRef(Ref):
     name = attribute(of=str)
     offset = attribute(of=DictOf[str, int])
-    loc = attribute(of=Location, optional=True)
+    loc = attribute(of=SourceLocation, optional=True)
 
 
 @enum.unique
@@ -421,12 +537,22 @@ class NativeFunction(enum.Enum):
     CEIL = 112
     TRUNC = 113
 
+@enum.unique
+class ReductionOperator(enum.Enum):
+    MIN = 1
+    MAX = 2
+    SUM = 3
+    PRODUCT = 4
+
+ReductionOperator.names = [op.name.lower() for op in ReductionOperator]
+
+ReductionOperator.SYMBOL_TO_IR_OP = { op.name.lower() : op for op in ReductionOperator }
 
 @attribclass
 class NativeFuncCall(Expr):
     func = attribute(of=NativeFunction)
     args = attribute(of=ListOf[Expr])
-    loc = attribute(of=Location, optional=True)
+    loc = attribute(of=SourceLocation, optional=True)
 
 
 class CompositeExpr(Expr):
@@ -466,7 +592,7 @@ UnaryOperator.IR_OP_TO_PYTHON_SYMBOL = {
 class UnaryOpExpr(CompositeExpr):
     op = attribute(of=UnaryOperator)
     arg = attribute(of=Expr)
-    loc = attribute(of=Location, optional=True)
+    loc = attribute(of=SourceLocation, optional=True)
 
 
 @enum.unique
@@ -534,7 +660,7 @@ class BinOpExpr(CompositeExpr):
     op = attribute(of=BinaryOperator)
     lhs = attribute(of=Expr)
     rhs = attribute(of=Expr)
-    loc = attribute(of=Location, optional=True)
+    loc = attribute(of=SourceLocation, optional=True)
 
 
 @attribclass
@@ -542,7 +668,7 @@ class TernaryOpExpr(CompositeExpr):
     condition = attribute(of=Expr)
     then_expr = attribute(of=Expr)
     else_expr = attribute(of=Expr)
-    loc = attribute(of=Location, optional=True)
+    loc = attribute(of=SourceLocation, optional=True)
 
 
 # ---- IR: statements ----
@@ -567,7 +693,7 @@ class FieldDecl(Decl):
     axes = attribute(of=ListOf[str])
     is_api = attribute(of=bool)
     layout_id = attribute(of=str, default="_default_")
-    loc = attribute(of=Location, optional=True)
+    loc = attribute(of=SourceLocation, optional=True)
 
 
 @attribclass
@@ -577,7 +703,7 @@ class VarDecl(Decl):
     length = attribute(of=int)
     is_api = attribute(of=bool)
     init = attribute(of=Literal, optional=True)
-    loc = attribute(of=Location, optional=True)
+    loc = attribute(of=SourceLocation, optional=True)
 
     @property
     def is_parameter(self):
@@ -587,18 +713,22 @@ class VarDecl(Decl):
     def is_scalar(self):
         return self.length == 0
 
+@attribclass
+class LocationDecl(Node):
+    name = attribute(of=str)
+    location = attribute(of=LocationType)
 
 @attribclass
 class BlockStmt(Statement):
     stmts = attribute(of=ListOf[Statement])
-    loc = attribute(of=Location, optional=True)
+    loc = attribute(of=SourceLocation, optional=True)
 
 
 @attribclass
 class Assign(Statement):
     target = attribute(of=Ref)
     value = attribute(of=Expr)
-    loc = attribute(of=Location, optional=True)
+    loc = attribute(of=SourceLocation, optional=True)
 
 
 @attribclass
@@ -606,7 +736,7 @@ class AugAssign(Statement):
     target = attribute(of=Ref)
     value = attribute(of=Expr)
     op = attribute(of=BinaryOperator)
-    loc = attribute(of=Location, optional=True)
+    loc = attribute(of=SourceLocation, optional=True)
 
 
 @attribclass
@@ -614,7 +744,7 @@ class If(Statement):
     condition = attribute(of=Expr)
     main_body = attribute(of=BlockStmt)
     else_body = attribute(of=BlockStmt, optional=True)
-    loc = attribute(of=Location, optional=True)
+    loc = attribute(of=SourceLocation, optional=True)
 
 
 # ---- IR: computations ----
@@ -656,14 +786,14 @@ class IterationOrder(enum.Enum):
 class AxisBound(Node):
     level = attribute(of=UnionOf[LevelMarker, VarRef])
     offset = attribute(of=int, default=0)
-    loc = attribute(of=Location, optional=True)
+    loc = attribute(of=SourceLocation, optional=True)
 
 
 @attribclass
 class AxisInterval(Node):
     start = attribute(of=AxisBound)
     end = attribute(of=AxisBound)
-    loc = attribute(of=Location, optional=True)
+    loc = attribute(of=SourceLocation, optional=True)
 
     @classmethod
     def full_interval(cls):
@@ -695,7 +825,7 @@ class ComputationBlock(Node):
     interval = attribute(of=AxisInterval)
     iteration_order = attribute(of=IterationOrder)
     body = attribute(of=BlockStmt)
-    loc = attribute(of=Location, optional=True)
+    loc = attribute(of=SourceLocation, optional=True)
 
 
 @attribclass
@@ -716,7 +846,33 @@ class StencilDefinition(Node):
     externals = attribute(of=DictOf[str, Any], optional=True)
     sources = attribute(of=DictOf[str, str], optional=True)
     docstring = attribute(of=str)
+    loc = attribute(of=SourceLocation, optional=True)
+    locations = attribute(of=DictOf[str, LocationDecl])
 
+@attribclass
+class LocationRef(Node):
+    name = attribute(of=str)
+
+@attribclass
+class NeighborSelector(Node):
+    chain = attribute(of=ListOf[LocationType])
+
+    symbols = ["vertices", "edges", "neighbors"] # todo: revise
+
+@attribclass
+class NeighborComprehension(Node):
+    location = attribute(of=LocationRef)
+    selector = attribute(of=NeighborSelector)
+
+@attribclass
+class NeighborMap(Node):
+    operand = attribute(of=Expr)
+    neighbors = attribute(of=NeighborComprehension)
+
+@attribclass
+class NeighborReduction(Expr):
+    local_field = attribute(of=NeighborMap)
+    op = attribute(of=ReductionOperator)
 
 # ---- Implementation IR (IIR) ----
 class IIRNode(Node):

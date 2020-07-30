@@ -23,6 +23,7 @@ definitions for the keywords of the DSL.
 import collections
 import inspect
 import types
+from abc import ABC
 
 import numpy as np
 
@@ -47,6 +48,13 @@ builtins = {
     "externals",
     "computation",
     "interval",
+    "location",
+    "Vertex",
+    "Edge",
+    "Cell",
+    "neighbours",
+    "vertices",
+    "edges",
     "__gtscript__",
     "__externals__",
     "__INLINED",
@@ -285,13 +293,16 @@ class _FieldDescriptor:
 
 
 class _FieldDescriptorMaker:
-    def __getitem__(self, dtype_and_axes):
-        if isinstance(dtype_and_axes, collections.abc.Collection) and not isinstance(
-            dtype_and_axes, str
-        ):
-            dtype, axes = dtype_and_axes
+    def __getitem__(self, axes_and_dtype):
+        if isinstance(axes_and_dtype, collections.abc.Collection) and not isinstance(
+            axes_and_dtype, str
+        ) and len(axes_and_dtype) == 2:
+            axes, dtype = axes_and_dtype
+        elif isistance(dtype_and_axes, np.floating):
+            raise "Syntax gtscript.Field[dtype] deprecated. Use gtscript.Field[IJK, dtype]."
         else:
-            dtype, axes = [dtype_and_axes, IJK]
+            raise "Invalid field descriptor."
+            #dtype, axes = [dtype_and_axes, IJK]
         return _FieldDescriptor(dtype, axes)
 
 
@@ -314,6 +325,26 @@ class _SequenceDescriptorMaker:
 Sequence = _SequenceDescriptorMaker()
 """Sequence descriptor."""
 
+# just a dummy class for now since the mesh interface has not been finalized
+class _DomainDescriptor:
+    pass
+
+# maybe something like this?
+# gtscript.Domain[Cartesian]
+# gtscript.Domain[Unstructured]
+# gtscript.Domain[Ocahedral]
+#class _CartesianDomainDescriptor(_DomainDescriptor):
+#    pass
+
+class _MeshDescriptor(_DomainDescriptor):
+    pass
+
+Mesh = _MeshDescriptor()
+"""Mesh descriptor"""
+
+Vertex = _Axis("Vertex")
+Edge = _Axis("Edge")
+Cell = _Axis("Cell")
 
 # GTScript builtins: external definitions
 def externals(*args):

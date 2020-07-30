@@ -58,7 +58,7 @@ class PythonSourceGenerator(gt_ir.IRNodeVisitor):
 
     def __call__(self, impl_node: gt_ir.Node, sources: gt_text.TextBlock):
         assert isinstance(impl_node, gt_ir.StencilImplementation)
-        assert impl_node.domain.sequential_axis.name == gt_definitions.CartesianSpace.Axis.K.name
+        assert impl_node.domain.sequential_axis.name == gt_definitions.CartesianIndexSpace.Axis.K.name
 
         self.impl_node = impl_node
         self.domain = impl_node.domain

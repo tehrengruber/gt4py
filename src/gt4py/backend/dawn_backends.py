@@ -36,7 +36,7 @@ from gt4py import utils as gt_utils
 from gt4py.utils import text as gt_text
 from . import pyext_builder
 
-DOMAIN_AXES = gt_definitions.CartesianSpace.names
+DOMAIN_AXES = gt_definitions.CartesianIndexSpace.names
 
 
 def _enum_dict(enum):

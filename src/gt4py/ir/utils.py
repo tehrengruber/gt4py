@@ -49,7 +49,7 @@ def make_field_decl(
     *,
     axes_dict=None,
 ):
-    axes_dict = axes_dict or {ax.name: ax for ax in Domain.LatLonGrid().axes}
+    axes_dict = axes_dict or {ax.name: ax for ax in Domain.CartesianGrid().axes}
     masked_axes = masked_axes or []
     return FieldDecl(
         name=name,
@@ -62,10 +62,9 @@ def make_field_decl(
 
 
 def make_field_ref(name: str, offset=(0, 0, 0), *, axes_names=None):
-    axes_names = axes_names or [ax.name for ax in Domain.LatLonGrid().axes]
+    axes_names = axes_names or [ax.name for ax in Domain.CartesianGrid().axes]
     offset = {axes_names[i]: value for i, value in enumerate(offset) if value is not None}
     return FieldRef(name=name, offset=offset)
-
 
 def make_axis_interval(bounds: tuple, *, offset_limit: int = 2):
     assert isinstance(bounds[0], (VarRef, UnaryOpExpr, BinOpExpr)) or (
@@ -155,7 +154,7 @@ def make_definition(
     sources=None,
 ):
     api_signature = make_api_signature(args_list)
-    domain = domain or Domain.LatLonGrid()
+    domain = domain or Domain.CartesianGrid()
     externals = externals or {}
     sources = sources or {}
 
@@ -311,7 +310,7 @@ def make_implementation(
 
     api_signature = make_api_signature(args_list)
 
-    domain = domain or Domain.LatLonGrid()
+    domain = domain or Domain.CartesianGrid()
     # if k_axis_splitters is not None:
     #     # Assume: ["var_name"] or  [("var_name", index)]
     #     refs = []
@@ -411,7 +410,7 @@ class AST2IRVisitor(ast.NodeVisitor):
         self.parameters = parameters
         self.local_symbols = local_symbols
         self.externals = externals
-        self.domain = domain or Domain.LatLonGrid()
+        self.domain = domain or Domain.CartesianGrid()
         self.extra_temp_decls = extra_temp_decls or {}
 
     def __call__(self, ast_root: ast.AST):
@@ -670,7 +669,7 @@ class AST2IRVisitor(ast.NodeVisitor):
                 field_decl = FieldDecl(
                     name=t.id,
                     data_type=DataType.AUTO,
-                    axes=[ax.name for ax in Domain.LatLonGrid().axes],
+                    axes=[ax.name for ax in Domain.CartesianGrid().axes],
                     layout_id=DEFAULT_LAYOUT_ID,
                     is_api=False,
                 )
