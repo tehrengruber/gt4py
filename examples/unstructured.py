@@ -45,8 +45,8 @@ def edge_reduction(
     edge_field: gtscript.Field[Edge, dtype],
     vertex_field: gtscript.Field[Vertex, dtype]
 ):
-    with computation(PARALLEL), interval(...), location(Edge) as e:
-        edge_field[e] = sum(vertex_field[v] for v in vertices(e))
+    with computation(FORWARD), interval(...), location(Edge) as e:
+        edge_field[e] = 0.5*sum(vertex_field[v] for v in vertices(e))
 
 class DummyMesh:
     pass

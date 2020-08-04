@@ -161,6 +161,11 @@ storing a reference to the piece of source code which originated the node.
                       computations: List[ComputationBlock],
                       [externals: Dict[str, Any], sources: Dict[str, str]])
 
+with index_space(VerticalAxes, VertexAxes) as (k, v)
+
+with axes(VerticalAxes) as k, axes(VertexAxes) as v
+    I, J, K
+
 
 -----------------
 Implementation IR
@@ -280,7 +285,7 @@ class Domain(Node):
     @classmethod
     def Mesh(cls):
         return cls(
-            parallel_axes=[Axis(name=MeshIndexSpace.axis_from_location_type(LocationType.Vertex).name)],
+            parallel_axes=[Axis(name=MeshIndexSpace.axis_from_location_type(LocationType.Edge).name)],
             sequential_axis=Axis(name=MeshIndexSpace.Axis.Vertical.name)
         )
 
