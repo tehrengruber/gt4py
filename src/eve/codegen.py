@@ -35,6 +35,7 @@ from subprocess import PIPE, Popen, run
 import black
 import jinja2
 from mako import template as mako_tpl
+import attr
 
 from . import exceptions, utils
 from .concepts import CollectionNode, LeafNode, Node, TreeNode
@@ -672,7 +673,7 @@ class TemplatedGenerator(NodeVisitor):
 
     def generic_visit(self, node: TreeNode, **kwargs: Any) -> Union[str, Collection[str]]:
         result: Union[str, Collection[str]] = ""
-        if isinstance(node, Node):
+        if isinstance(node, Node) or attr.has(type(node)):
             template, key = self.get_template(node)
             if template:
                 try:
@@ -707,7 +708,7 @@ class TemplatedGenerator(NodeVisitor):
         """Get a template for a node instance (see class documentation)."""
         template: Optional[Template] = None
         template_key = None
-        if isinstance(node, Node):
+        if isinstance(node, Node) or attr.has(type(node)):
             for node_class in node.__class__.__mro__:
                 template_key = node_class.__name__
                 template = self.__templates__.get(template_key, None)
@@ -737,7 +738,20 @@ class TemplatedGenerator(NodeVisitor):
         )
 
     def transform_children(self, node: Node, **kwargs: Any) -> Dict[str, Any]:
-        return {key: self.visit(value, **kwargs) for key, value in node.iter_children()}
+        if isinstance(node, Node):
+            children = node.iter_children()
+        elif attr.has(type(node)):
+            children = attr.asdict(node, recurse=False).items()
+        else:
+            raise ValueError()
+        return {key: self.visit(value, **kwargs) for key, value in children}
 
     def transform_impl_fields(self, node: Node, **kwargs: Any) -> Dict[str, Any]:
-        return {key: self.visit(value, **kwargs) for key, value in node.iter_impl_fields()}
+        if isinstance(node, Node):
+            children = node.iter_impl_fields()
+        elif attr.has(type(node)):
+            # todo
+            children = {}
+        else:
+            raise ValueError()
+        return {key: self.visit(value, **kwargs) for key, value in children}

@@ -396,6 +396,32 @@ def union_type_attrs_validator(*type_args: Type) -> ValidatorType:
         )
 
 
+#@attrs(repr=False, slots=False, hash=True)
+#class _DataModelAttrValidator(object):
+#    def __call__(self, inst, attr, value):
+#        strict_type_attrs_validator()
+#        """
+#        We use a callable class to be able to change the ``__repr__``.
+#        """
+#        if not callable(value):
+#            message = (
+#                "'{name}' must be callable "
+#                "(got {value!r} that is a {actual!r})."
+#            )
+#            raise NotCallableError(
+#                msg=message.format(
+#                    name=attr.name, value=value, actual=value.__class__
+#                ),
+#                value=value,
+#            )
+#
+#    def __repr__(self):
+#        return "<datamodel_attr_validator>"
+
+#def datamodel_attr_validator():
+#    strict_type_attrs_validator()
+
+
 def strict_type_attrs_validator(
     type_hint: Any, *, forward_eval_module: Optional[str] = None
 ) -> ValidatorType:
@@ -449,6 +475,12 @@ def strict_type_attrs_validator(
                 value_validator=strict_type_attrs_validator(value_type_hint),
                 mapping_validator=attr.validators.instance_of(origin_type),
             )
+        if issubclass(origin_type, DataModel):
+            assert hasattr(origin_type, "__generic__") and origin_type.__generic__
+            return datamodel_attr_validator(origin_type)
+        if issubclass(origin_type, collections.abc.Callable):
+            return attr.validators.instance_of(origin_type)
+
 
     raise TypeError(f"Type description '{type_hint}' is not supported.")
 
@@ -714,7 +746,7 @@ def _make_datamodel(
 
     cls.__class_getitem__ = _make_data_model_class_getitem()
 
-    attr_settings = {"auto_attribs": True, "slots": False, "kw_only": True}
+    attr_settings = {"auto_attribs": True, "slots": False, "kw_only": False}
     hash_arg = None if not unsafe_hash else True
     new_cls = attr.define(  # type: ignore[attr-defined]  # attr.define is not visible for mypy
         **attr_settings,
@@ -811,6 +843,8 @@ def _make_concrete_with_cache(
     namespace = {
         "__annotations__": new_annotations,
         "__module__": module if module else datamodel_cls.__module__,
+        "__args__": type_args,
+        "__generic__": True, # todo(tehrengruber): put into __datamodel_params__?
         **new_field_c_attrs,
     }
 
@@ -1132,6 +1166,7 @@ def field(
     repr: bool = True,  # noqa: A002   # shadowing 'repr' python builtin
     hash: Optional[bool] = None,  # noqa: A002   # shadowing 'hash' python builtin
     compare: bool = True,
+    kw_only: bool = False,
     metadata: Optional[Mapping[Any, Any]] = None,
 ) -> Any:  # attr.s lies on purpose in some typings
     """Define a new attribute on a class with advanced options.
@@ -1188,6 +1223,7 @@ def field(
         eq=compare,
         order=compare,
         metadata=metadata,
+        kw_only=kw_only
     )
 
 

@@ -20,6 +20,7 @@
 from __future__ import annotations
 
 import collections.abc
+import attr
 
 from . import concepts, utils
 from .type_definitions import Enum
@@ -58,6 +59,9 @@ def generic_iter_children(
         children_iterator = zip(node, node) if with_keys else iter(node)  # type: ignore  # problems with iter(Set)
     elif isinstance(node, collections.abc.Mapping):
         children_iterator = node.items() if with_keys else node.values()
+    elif attr.has(type(node)):
+        node_dict = attr.asdict(node, recurse=False)
+        children_iterator = node_dict.items() if with_keys else node_dict.values()
 
     return children_iterator
 

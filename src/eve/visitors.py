@@ -23,6 +23,8 @@ import collections.abc
 import copy
 import operator
 
+import eve.datamodels
+
 from . import concepts, iterators, utils
 from .concepts import NOTHING
 from .typingx import (
@@ -108,14 +110,21 @@ class NodeVisitor:
         method_name = "visit_" + node.__class__.__name__
         if hasattr(self, method_name):
             visitor = getattr(self, method_name)
-        elif isinstance(node, concepts.Node):
-            for node_class in node.__class__.__mro__[1:]:
+        elif isinstance(node, (concepts.Node, eve.datamodels.DataModelTp)):
+            mro_mod = None
+            if isinstance(node, concepts.Node):
+                mro_mod=slice(1, None)
+            elif isinstance(node, eve.datamodels.DataModelTp):
+                mro_mod = slice(0, None)
+            else:
+                raise ValueError()
+            for node_class in node.__class__.__mro__[mro_mod]:
                 method_name = "visit_" + node_class.__name__
                 if hasattr(self, method_name):
                     visitor = getattr(self, method_name)
                     break
 
-                if node_class is concepts.Node:
+                if node_class in (concepts.Node, eve.datamodels.DataModelTp):
                     break
 
         return visitor(node, **kwargs)
@@ -152,6 +161,8 @@ class NodeTranslator(NodeVisitor):
     _memo_dict_: Dict[int, Any]
 
     def generic_visit(self, node: concepts.TreeNode, **kwargs: Any) -> Any:
+        import attr
+
         result: Any = None
         if isinstance(node, (concepts.Node, collections.abc.Collection)) and utils.is_collection(
             node
@@ -179,6 +190,12 @@ class NodeTranslator(NodeVisitor):
                 result = node.__class__(  # type: ignore
                     {key: value for key, value in tmp_items.items() if value is not NOTHING}
                 )
+
+        elif attr.has(type(node)):
+            tmp_items: Collection[concepts.TreeNode] = {key: self.visit(value, **kwargs) for key, value in attr.asdict(node, recurse=False).items()}
+            result = node.__class__(  # type: ignore
+                **{key: value for key, value in tmp_items.items() if value is not NOTHING}
+            )
 
         else:
             if not hasattr(self, "_memo_dict_"):
