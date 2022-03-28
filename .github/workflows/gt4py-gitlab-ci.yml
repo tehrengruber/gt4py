@@ -23,3 +23,5 @@ jobs:
       env:
         REMOTE: git@gitlab.com:cscs-ci/gridtools/gt4py.git
         GIT_SSH_PRIVATE_KEY: ${{ secrets.MIRROR_SSH_KEY }}
+    - name: Setup tmate session
+      uses: mxschmitt/action-tmate@v2
