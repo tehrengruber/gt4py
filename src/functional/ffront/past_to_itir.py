@@ -29,14 +29,15 @@ def _size_arg_from_field(field_name: str, dim: int) -> str:
     return f"__{field_name}_size_{dim}"
 
 
-def _flatten_tuple_expr(node: past.TupleExpr | past.Name) -> list[past.Name]:
-    if isinstance(node, past.Name):
+def _flatten_tuple_expr(node: past.Name | past.Subscript | past.TupleExpr) -> list[past.Name]:
+    if isinstance(node, (past.Name, past.Subscript)):
         return [node]
     elif isinstance(node, past.TupleExpr):
         result = []
         for e in node.elts:
             result.extend(_flatten_tuple_expr(e))
         return result
+    raise ValueError("Only `past.Name`, `past.Subscript` or `past.TupleExpr`s thereof are allowed.")
 
 
 class ProgramLowering(traits.VisitorWithSymbolTableTrait, NodeTranslator):
@@ -152,14 +153,16 @@ class ProgramLowering(traits.VisitorWithSymbolTableTrait, NodeTranslator):
         if isinstance(node, past.Name):
             return itir.SymRef(id=node.id)
         elif isinstance(node, past.TupleExpr):
+            if any(isinstance(el, past.Subscript) for el in node.elts):
+                raise NotImplementedError("Slicing for tuple `out` argument not supported.")
             return itir.FunCall(
                 fun=itir.SymRef(id="make_tuple"),
                 args=[self._construct_itir_out_arg(el) for el in node.elts],
             )
-        else:
-            raise RuntimeError(
-                "Unexpected `out` argument. Must be a `past.Name` or nesting of `past.TupleExpr` and `past.Name`."
-            )
+
+        raise AssertionError(
+            "Unexpected `out` argument. Must be a `past.Name` or nesting of `past.TupleExpr` and `past.Name`."
+        )
 
     def _construct_itir_domain_arg(
         self, out_field: past.Name, slices: Optional[list[past.Slice]] = None

@@ -40,7 +40,7 @@ def test_tuple_constructed_in_out_invalid_slicing():
 
     parsed = ProgramParser.apply_to_function(tuple_program)
     with pytest.raises(
-        RuntimeError,
-        match="Unexpected `out` argument",
+        NotImplementedError,
+        match="Slicing for tuple `out` argument not supported.",
     ):
         ProgramLowering.apply(parsed, function_definitions=[], grid_type=GridType.CARTESIAN)
