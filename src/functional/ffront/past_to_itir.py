@@ -13,16 +13,12 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import Optional
 
 from eve import NodeTranslator, traits
 from functional.common import DimensionKind, GridType, GTTypeError
-from functional.ffront import common_types, program_ast as past
+from functional.ffront import common_types, program_ast as past, type_info
 from functional.iterator import ir as itir
-
-
-if TYPE_CHECKING:
-    from typing import Optional
 
 
 def _size_arg_from_field(field_name: str, dim: int) -> str:
@@ -117,7 +113,7 @@ class ProgramLowering(traits.VisitorWithSymbolTableTrait, NodeTranslator):
         )
 
     def _visit_stencil_call(self, node: past.Call, **kwargs) -> itir.StencilClosure:
-        assert common_types.is_field_type_or_tuple_of_field_type(node.kwargs["out"].type)
+        assert type_info.is_field_type_or_tuple_of_field_type(node.kwargs["out"].type)
 
         output, domain = self._visit_stencil_call_out_arg(node.kwargs["out"], **kwargs)
 
