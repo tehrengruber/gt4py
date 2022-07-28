@@ -155,10 +155,11 @@ class ProgramLowering(traits.VisitorWithSymbolTableTrait, NodeTranslator):
                 fun=itir.SymRef(id="make_tuple"),
                 args=[self._construct_itir_out_arg(el) for el in node.elts],
             )
-
-        raise AssertionError(
-            "Unexpected `out` argument. Must be a `past.Name` or nesting of `past.TupleExpr` and `past.Name`."
-        )
+        else:
+            raise RuntimeError(
+                "Unexpected `out` argument. Must be a `past.Name` or nesting of "
+                "`past.TupleExpr` and `past.Name`."
+            )
 
     def _construct_itir_domain_arg(
         self, out_field: past.Name, slices: Optional[list[past.Slice]] = None
