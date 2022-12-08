@@ -178,12 +178,13 @@ class Column(np.lib.mixins.NDArrayOperatorsMixin):
     and simplify dispatching in iterator ir builtins.
     """
 
-    def __init__(self, kstart: int, data: np.ndarray) -> None:
+    def __init__(self, kstart: int, data: np.ndarray | Scalar) -> None:
         self.kstart = kstart
         self.data = data
 
     def __getitem__(self, i: int) -> Any:
-        result = self.data[i - self.kstart]
+        assert isinstance(self.data, (np.ndarray, Scalar))
+        result = self.data[i - self.kstart] if isinstance(self.data, np.ndarray) else self.data
         # if the element type is a tuple return a regular type instead of a
         #  numpy type
         if self.data.dtype.names:

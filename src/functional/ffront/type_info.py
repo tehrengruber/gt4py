@@ -579,18 +579,24 @@ def function_signature_incompatibilities_fieldop(
 def function_signature_incompatibilities_scanop(
     scanop_type: ct.ScanOperatorType, args: list[ct.SymbolType], kwargs: dict[str, ct.SymbolType]
 ) -> Iterator[str]:
-    if not all(is_field_type_or_tuple_of_field_type(arg) for arg in args):
-        yield "Arguments to scan operator must be fields or tuples thereof."
+    if not all(
+        is_field_type_or_tuple_of_field_type(arg) or isinstance(arg, ct.ScalarType) for arg in args
+    ):
+        yield "Arguments to scan operator must be fields, scalars or tuples thereof."
         return
 
-    arg_dims = [extract_dims(el) for arg in args for el in primitive_constituents(arg)]
+    new_args = [
+        ct.FieldType(dims=[], dtype=extract_dtype(arg)) if is_number(arg) else arg for arg in args
+    ]
+
+    arg_dims = [extract_dims(el) for arg in new_args for el in primitive_constituents(arg)]
     try:
         promote_dims(*arg_dims)
     except GTTypeError as e:
         yield e.args[0]
 
-    if len(args) != len(scanop_type.definition.args) - 1:
-        yield f"Scan operator takes {len(scanop_type.definition.args)-1} arguments, but {len(args)} were given."
+    if len(new_args) != len(scanop_type.definition.args) - 1:
+        yield f"Scan operator takes {len(scanop_type.definition.args)-1} arguments, but {len(new_args)} were given."
         return
 
     promoted_args = []
@@ -601,7 +607,7 @@ def function_signature_incompatibilities_scanop(
         # as we capture `i`.
         def _as_field(dtype: ct.ScalarType, path: tuple[int, ...]) -> ct.FieldType:
             try:
-                el_type = reduce(lambda type_, idx: type_.types[idx], path, args[i])  # type: ignore[attr-defined] # noqa: B023
+                el_type = reduce(lambda type_, idx: type_.types[idx], path, new_args[i])  # type: ignore[attr-defined] # noqa: B023
                 return ct.FieldType(dims=extract_dims(el_type), dtype=dtype)
             except (IndexError, AttributeError):
                 # The structure of the scan passes argument and the requested
@@ -621,7 +627,7 @@ def function_signature_incompatibilities_scanop(
         returns=ct.DeferredSymbolType(constraint=None),
     )
 
-    yield from function_signature_incompatibilities(function_type, args, kwargs)
+    yield from function_signature_incompatibilities(function_type, new_args, kwargs)
 
 
 @function_signature_incompatibilities.register

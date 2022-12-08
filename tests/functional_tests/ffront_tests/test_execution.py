@@ -1434,6 +1434,26 @@ def test_constant_closure_vars():
     assert np.allclose(np.asarray(output), constants.PI * constants.E)
 
 
+def test_scalar_scan():
+    size = 10
+    KDim = Dimension("K", kind=DimensionKind.VERTICAL)
+    qc = np_as_located_field(IDim, KDim)(np.zeros((size, size)))
+    scalar = 1.0
+
+    @scan_operator(axis=KDim, forward=True, init=(0.0))
+    def _scan_scalar(carry: float, qc_in: float, scalar: float):
+        qc = qc_in + carry + scalar
+        return qc
+
+    @program
+    def scan_scalar(qc: Field[[IDim, KDim], float], scalar: float):
+        _scan_scalar(qc, scalar, out=(qc))
+
+    scan_scalar(qc, scalar, offset_provider={})
+
+
+
+
 def test_simple_if(fieldview_backend):
     size = 10
     a = np_as_located_field(IDim, JDim)(np.ones((size, size)))
