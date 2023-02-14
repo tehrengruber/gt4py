@@ -19,9 +19,11 @@ from functional.ffront.fbuiltins import (
     Field,
     broadcast,
     float64,
+    int32,
     int64,
     max_over,
     min_over,
+    minimum,
     neighbor_sum,
     where,
 )
@@ -29,14 +31,13 @@ from functional.ffront.fbuiltins import (
 from .ffront_test_utils import *
 
 
-def test_maxover_execution(reduction_setup, fieldview_backend):
+def test_maxover_execution_sparse(reduction_setup, fieldview_backend):
     """Testing max_over functionality."""
-    if fieldview_backend in [gtfn_cpu.run_gtfn or fieldview_backend, gtfn_cpu.run_gtfn_imperative]:
-        pytest.skip("not yet supported.")
-
     rs = reduction_setup
-    Vertex, V2EDim = rs.Vertex, rs.V2EDim
-    inp_field = np_as_located_field(Vertex, V2EDim)(rs.v2e_table)
+    Vertex = rs.Vertex
+    V2EDim = rs.V2EDim
+
+    inp_field = np_as_located_field(Vertex, V2EDim)(rs.v2e_table.astype(np.int64))
 
     @field_operator(backend=fieldview_backend)
     def maxover_fieldoperator(inp_field: Field[[Vertex, V2EDim], int64]) -> Field[[Vertex], int64]:
@@ -50,18 +51,20 @@ def test_maxover_execution(reduction_setup, fieldview_backend):
 
 def test_maxover_execution_negatives(reduction_setup, fieldview_backend):
     """Testing max_over functionality for negative values in array."""
-    if fieldview_backend in [gtfn_cpu.run_gtfn or fieldview_backend, gtfn_cpu.run_gtfn_imperative]:
-        pytest.skip("not yet supported.")
-
     rs = reduction_setup
-    Vertex, V2EDim, V2E = rs.Vertex, rs.V2EDim, rs.V2E
     Edge = rs.Edge
+    Vertex = rs.Vertex
+    V2EDim = rs.V2EDim
+    V2E = rs.V2E
+
     edge_num = np.max(rs.v2e_table)
     inp_field_arr = np.arange(-edge_num // 2, edge_num // 2 + 1, 1, dtype=int)
     inp_field = np_as_located_field(Edge)(inp_field_arr)
 
     @field_operator(backend=fieldview_backend)
-    def maxover_negvals(edge_f: Field[[Edge], int64]) -> Field[[Vertex], int64]:
+    def maxover_negvals(
+        edge_f: Field[[Edge], int64],
+    ) -> Field[[Vertex], int64]:
         out = max_over(edge_f(V2E), axis=V2EDim)
         return out
 
@@ -73,30 +76,29 @@ def test_maxover_execution_negatives(reduction_setup, fieldview_backend):
 
 def test_minover_execution(reduction_setup, fieldview_backend):
     """Testing the min_over functionality"""
-    if fieldview_backend in [gtfn_cpu.run_gtfn, gtfn_cpu.run_gtfn_imperative]:
-        pytest.skip("not implemented yet")
-
     rs = reduction_setup
-    Vertex, V2EDim = rs.Vertex, rs.V2EDim
-    in_field = np_as_located_field(Vertex, V2EDim)(rs.v2e_table)
+    Vertex = rs.Vertex
+    V2EDim = rs.V2EDim
+
+    in_field = np_as_located_field(Vertex, V2EDim)(rs.v2e_table.astype(np.int32))
+    out_field = np_as_located_field(Vertex)(np.zeros(rs.num_vertices, dtype=np.int32))
 
     @field_operator
-    def minover_fieldoperator(input: Field[[Vertex, V2EDim], int64]) -> Field[[Vertex], int64]:
+    def minover_fieldoperator(input: Field[[Vertex, V2EDim], int32]) -> Field[[Vertex], int32]:
         return min_over(input, axis=V2EDim)
 
-    minover_fieldoperator(in_field, out=rs.out, offset_provider=rs.offset_provider)
+    minover_fieldoperator(in_field, out=out_field, offset_provider=rs.offset_provider)
 
     ref = np.min(rs.v2e_table, axis=1)
-    assert np.allclose(ref, rs.out)
+    assert np.allclose(ref, out_field)
 
 
 def test_minover_execution_float(reduction_setup, fieldview_backend):
     """Testing the min_over functionality"""
-    if fieldview_backend in [gtfn_cpu.run_gtfn, gtfn_cpu.run_gtfn_imperative]:
-        pytest.skip("not implemented yet")
-
     rs = reduction_setup
-    Vertex, V2EDim = rs.Vertex, rs.V2EDim
+    Vertex = rs.Vertex
+    V2EDim = rs.V2EDim
+
     in_array = np.random.default_rng().uniform(low=-1, high=1, size=rs.v2e_table.shape)
     in_field = np_as_located_field(Vertex, V2EDim)(in_array)
     out_field = np_as_located_field(Vertex)(np.zeros(rs.num_vertices))
@@ -113,16 +115,15 @@ def test_minover_execution_float(reduction_setup, fieldview_backend):
 
 def test_reduction_execution(reduction_setup, fieldview_backend):
     """Testing a trivial neighbor sum."""
-    if fieldview_backend in [gtfn_cpu.run_gtfn, gtfn_cpu.run_gtfn_imperative]:
-        pytest.skip("IndexFields are not supported yet.")
-
     rs = reduction_setup
     Edge = rs.Edge
-    Vertex, V2EDim, V2E = rs.Vertex, rs.V2EDim, rs.V2E
+    Vertex = rs.Vertex
+    V2EDim = rs.V2EDim
+    V2E = rs.V2E
 
     @field_operator
     def reduction(edge_f: Field[[Edge], int64]) -> Field[[Vertex], int64]:
-        return neighbor_sum(edge_f(V2E), axis=V2EDim)
+        return neighbor_sum(edge_f(V2E) + 1, axis=V2EDim)
 
     @program(backend=fieldview_backend)
     def fencil(edge_f: Field[[Edge], int64], out: Field[[Vertex], int64]) -> None:
@@ -130,21 +131,19 @@ def test_reduction_execution(reduction_setup, fieldview_backend):
 
     fencil(rs.inp, rs.out, offset_provider=rs.offset_provider)
 
-    ref = np.sum(rs.v2e_table, axis=1)
+    ref = np.sum(rs.v2e_table + np.where(rs.v2e_table != -1, 1, 0), axis=1)
     assert np.allclose(ref, rs.out)
 
 
 def test_reduction_execution_nb(reduction_setup, fieldview_backend):
     """Testing a neighbor sum on a neighbor field."""
-    if fieldview_backend in [gtfn_cpu.run_gtfn, gtfn_cpu.run_gtfn_imperative]:
-        pytest.skip("not yet supported.")
-
     rs = reduction_setup
-    Vertex, V2EDim = rs.Vertex, rs.V2EDim
-    nb_field = np_as_located_field(Vertex, V2EDim)(rs.v2e_table)
+    V2EDim = rs.V2EDim
+
+    nb_field = np_as_located_field(rs.Vertex, rs.V2EDim)(rs.v2e_table.astype(np.int64))
 
     @field_operator(backend=fieldview_backend)
-    def reduction(nb_field: Field[[Vertex, V2EDim], int64]) -> Field[[Vertex], int64]:
+    def reduction(nb_field: Field[[rs.Vertex, rs.V2EDim], int64]) -> Field[[rs.Vertex], int64]:  # type: ignore
         return neighbor_sum(nb_field, axis=V2EDim)
 
     reduction(nb_field, out=rs.out, offset_provider=rs.offset_provider)
@@ -155,12 +154,11 @@ def test_reduction_execution_nb(reduction_setup, fieldview_backend):
 
 def test_reduction_expression(reduction_setup, fieldview_backend):
     """Test reduction with an expression directly inside the call."""
-    if fieldview_backend in [gtfn_cpu.run_gtfn, gtfn_cpu.run_gtfn_imperative]:
-        pytest.skip("IndexFields are not supported yet.")
-
     rs = reduction_setup
-    Vertex, V2EDim, V2E = rs.Vertex, rs.V2EDim, rs.V2E
+    Vertex = rs.Vertex
     Edge = rs.Edge
+    V2EDim = rs.V2EDim
+    V2E = rs.V2E
 
     @field_operator
     def reduce_expr(edge_f: Field[[Edge], int64]) -> Field[[Vertex], int64]:
@@ -176,6 +174,65 @@ def test_reduction_expression(reduction_setup, fieldview_backend):
 
     ref = 3 * np.sum(-(rs.v2e_table**2) * 2, axis=1)
     assert np.allclose(ref, rs.out.array())
+
+
+def test_reduction_expression2(reduction_setup, fieldview_backend):
+    # if fieldview_backend == gtfn_cpu.run_gtfn:
+    #    pytest.skip("IndexFields are not supported yet.")
+    rs = reduction_setup
+    Vertex = rs.Vertex
+    Edge = rs.Edge
+    V2EDim = rs.V2EDim
+    V2E = rs.V2E
+
+    vertex_field = np_as_located_field(Vertex)(np.arange(0, rs.num_vertices, 1))
+    edge_field = np_as_located_field(Edge)(np.arange(0, rs.num_edges, 1))
+    vertex_v2e_field = np_as_located_field(Vertex, V2EDim)(rs.v2e_table.astype(np.int64))
+    out = np_as_located_field(Vertex)(np.zeros(rs.num_vertices, dtype=np.int64))
+
+    @field_operator
+    def reduction(
+        vertex_field: Field[[Vertex], int64],
+        edge_field: Field[[Edge], int64],
+        vertex_v2e_field: Field[[Vertex, V2EDim], int64],
+    ):
+        tmp = vertex_field + edge_field(V2E) + vertex_v2e_field
+        return neighbor_sum(tmp, axis=V2EDim)
+
+    reduction(
+        vertex_field, edge_field, vertex_v2e_field, out=out, offset_provider=rs.offset_provider
+    )
+
+    ref = np.sum(
+        vertex_field.array()[:, np.newaxis] + edge_field.array()[rs.v2e_table] + rs.v2e_table,
+        axis=1,
+    )
+    assert np.allclose(ref, out.array())
+
+
+def test_math_builtin_with_sparse_field(reduction_setup, fieldview_backend):
+    # if fieldview_backend == gtfn_cpu.run_gtfn:
+    #    pytest.skip("IndexFields are not supported yet.")
+    rs = reduction_setup
+    Vertex = rs.Vertex
+    Edge = rs.Edge
+    V2EDim = rs.V2EDim
+    V2E = rs.V2E
+
+    edge_field = np_as_located_field(Edge)(np.arange(0, rs.num_edges, 1, dtype=np.int32))
+    vertex_v2e_field = np_as_located_field(Vertex, V2EDim)(rs.v2e_table.astype(np.int32))
+    out = np_as_located_field(Vertex)(np.zeros(rs.num_vertices, dtype=np.int32))
+
+    @field_operator
+    def reduction(
+        edge_field: Field[[Edge], int32], vertex_v2e_field: Field[[Vertex, V2EDim], int32]
+    ):
+        return neighbor_sum(minimum(edge_field(V2E), vertex_v2e_field), axis=V2EDim)
+
+    reduction(edge_field, vertex_v2e_field, out=out, offset_provider=rs.offset_provider)
+
+    ref = np.sum(np.minimum(edge_field.array()[rs.v2e_table], rs.v2e_table), axis=1)
+    assert np.allclose(ref, out.array())
 
 
 def test_conditional_nested_tuple():

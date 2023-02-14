@@ -35,7 +35,7 @@ def inline_lambda(
                 isinstance(arg, ir.FunCall)
                 and isinstance(arg.fun, ir.FunCall)
                 and isinstance(arg.fun.fun, ir.SymRef)
-                and arg.fun.fun.id == "lift"
+                and arg.fun.fun.id in ["lift", "translate_shift", "ignore_shift"]
             ):
                 eligible_params[i] = True
 

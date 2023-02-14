@@ -13,6 +13,7 @@
 # distribution for a copy of the license or check <https://www.gnu.org/licenses/>.
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
+import warnings
 from functools import reduce
 
 import numpy as np
@@ -30,6 +31,7 @@ from functional.ffront.fbuiltins import (
     int64,
     max_over,
     min_over,
+    minimum,
     neighbor_sum,
     where,
 )
@@ -116,16 +118,15 @@ def test_unstructured_shift(reduction_setup, fieldview_backend):
 
 def test_fold_shifts(fieldview_backend):
     """Shifting the result of an addition should work."""
-    a = np_as_located_field(IDim)(np.arange(size + 1, dtype=np.float64))
-    b = np_as_located_field(IDim)(np.ones((size + 2)) * 2)
+    a = np_as_located_field(IDim)(np.arange(size + 2, dtype=np.float64))
+    b = np_as_located_field(IDim)(np.ones((size + 3)) * 2)
     out_I_float = np_as_located_field(IDim)(np.zeros((size), dtype=float64))
 
     @field_operator
     def auto_lift(
         inp1: Field[[IDim], float64], inp2: Field[[IDim], float64]
     ) -> Field[[IDim], float64]:
-        tmp = inp1 + inp2(Ioff[1])
-        return tmp(Ioff[1])
+        return (inp1 + inp2(Ioff[1]))(Ioff[2])
 
     @program(backend=fieldview_backend)
     def fencil(
@@ -135,16 +136,14 @@ def test_fold_shifts(fieldview_backend):
 
     fencil(a, b, out_I_float, offset_provider={"Ioff": IDim})
 
-    assert np.allclose(a[1:] + b[2:], out_I_float)
+    assert np.allclose(a[2:] + b[3:], out_I_float)
 
 
 def test_tuples(fieldview_backend):
-    a_I_float = np_as_located_field(IDim)(np.random.randn(size).astype("float64"))
-    b_I_float = np_as_located_field(IDim)(np.random.randn(size).astype("float64"))
-    out_I_float = np_as_located_field(IDim)(np.zeros((size), dtype=float64))
-
-    if fieldview_backend == gtfn_cpu.run_gtfn:
-        pytest.skip("Tuples are not supported yet.")
+    size = 10
+    a = np_as_located_field(IDim)(np.random.randn(size).astype("float64"))
+    b = np_as_located_field(IDim)(np.random.randn(size).astype("float64"))
+    c = np_as_located_field(IDim)(np.zeros((size), dtype=float64))
 
     @field_operator
     def tuples(
@@ -160,9 +159,30 @@ def test_tuples(fieldview_backend):
     ) -> None:
         tuples(inp1, inp2, out=out)
 
-    fencil(a_I_float, b_I_float, out_I_float, offset_provider={})
+    fencil(a, b, c, offset_provider={})
 
-    assert np.allclose((a_I_float.array() * 1.3 + b_I_float.array() * 5.0) * 3.4, out_I_float)
+    assert np.allclose((a.array() * 1.3 + b.array() * 5.0) * 3.4, c)
+
+
+def test_promotion(fieldview_backend):
+    Edge = Dimension("Edge")
+    K = Dimension("K")
+
+    size = 10
+    ksize = 5
+    a = np_as_located_field(Edge, K)(np.ones((size, ksize)))
+    b = np_as_located_field(K)(np.ones((ksize)) * 2)
+    c = np_as_located_field(Edge, K)(np.zeros((size, ksize)))
+
+    @field_operator(backend=fieldview_backend)
+    def promotion(
+        inp1: Field[[Edge, K], float64], inp2: Field[[K], float64]
+    ) -> Field[[Edge, K], float64]:
+        return inp1 / inp2
+
+    promotion(a, b, out=c, offset_provider={})
+
+    assert np.allclose((a.array() / b.array()), c)
 
 
 def test_scalar_arg(fieldview_backend):
@@ -203,6 +223,14 @@ def test_scalar_arg_with_field(fieldview_backend):
         pytest.skip("IndexFields and ConstantFields are not supported yet.")
 
     inp = index_field(Edge, dtype=float64)
+    if fieldview_backend == gtfn_cpu.run_gtfn:
+        warnings.warn(
+            "IndexFields not supported in gtfn backend. Using a memory backed field instead."
+        )
+        # TODO(tehrengruber): if we choose the wrong size here the gtfn backend
+        #  will happily executy, but give wrong results. we should implement
+        #  checks for such cases at some point.
+        inp = np_as_located_field(Edge)(np.array([inp[i] for i in range(size + 1)]))
     factor = 3.0
     out = np_as_located_field(Edge)(np.zeros((size), dtype=np.float64))
 
@@ -332,7 +360,10 @@ def test_astype_float(fieldview_backend):
     assert np.allclose(c_int32.array(), out_int_32)
 
 
-def test_nested_tuple_return():
+def test_nested_tuple_return(fieldview_backend):
+    if fieldview_backend == gtfn_cpu.run_gtfn:
+        pytest.skip("Tuple return values are not supported in gtfn yet.")
+
     a_I_float = np_as_located_field(IDim)(np.random.randn(size).astype("float64"))
     b_I_float = np_as_located_field(IDim)(np.random.randn(size).astype("float64"))
     out_I_float = np_as_located_field(IDim)(np.zeros((size), dtype=float64))
@@ -385,6 +416,7 @@ def test_tuple_with_local_field_in_reduction_shifted(reduction_setup):
     Edge = rs.Edge
     Vertex = rs.Vertex
     V2EDim = rs.V2EDim
+    E2VDim = rs.E2VDim
     V2E = rs.V2E
     E2V = rs.E2V
 
@@ -392,8 +424,8 @@ def test_tuple_with_local_field_in_reduction_shifted(reduction_setup):
     num_edges = rs.num_edges
 
     # TODO(tehrengruber): use different values per location
-    a = np_as_located_field(Edge)(np.ones((num_edges,)))
-    b = np_as_located_field(Vertex)(2 * np.ones((num_vertices,)))
+    a = np_as_located_field(Edge)(np.random.randn(num_edges))
+    b = np_as_located_field(Vertex)(np.random.randn(num_vertices))
     out = np_as_located_field(Edge)(np.zeros((num_edges,)))
 
     @field_operator
@@ -401,19 +433,13 @@ def test_tuple_with_local_field_in_reduction_shifted(reduction_setup):
         edge_field: Field[[Edge], float64], vertex_field: Field[[Vertex], float64]
     ) -> Field[[Edge], float64]:
         tup = edge_field(V2E), vertex_field
-        # the shift inside the reduction fails as tup is a tuple of iterators
-        #  (as it contains a local field) which can not be shifted
         red = neighbor_sum(tup[0] + vertex_field, axis=V2EDim)
-        # even if the above is fixed we need to be careful with a subsequent
-        #  shift as the lifted lambda will contain tup as an argument which -
-        #  again - can not be shifted.
-        return red(E2V[0])
+        return neighbor_sum(red(E2V), axis=E2VDim)
 
     reduce_tuple_element(a, b, out=out, offset_provider=rs.offset_provider)
 
-    # conn table used is inverted here on purpose
     red = np.sum(np.asarray(a)[rs.v2e_table] + np.asarray(b)[:, np.newaxis], axis=1)
-    expected = red[rs.e2v_table][:, 0]
+    expected = np.sum(red[rs.e2v_table], axis=1)
 
     assert np.allclose(expected, out)
 
@@ -439,6 +465,7 @@ def test_tuple_arg(fieldview_backend):
 
 @pytest.mark.parametrize("forward", [True, False])
 def test_fieldop_from_scan(fieldview_backend, forward):
+    # TODO(tehrengruber): broken fix
     if fieldview_backend in [gtfn_cpu.run_gtfn, gtfn_cpu.run_gtfn_imperative]:
         pytest.xfail("gtfn does not yet support scan pass.")
     init = 1.0
@@ -506,7 +533,7 @@ def test_solve_triag(fieldview_backend):
     np.allclose(expected, out)
 
 
-def test_ternary_operator():
+def test_ternary_operator(fieldview_backend):
     a_I_float = np_as_located_field(IDim)(np.random.randn(size).astype("float64"))
     b_I_float = np_as_located_field(IDim)(np.random.randn(size).astype("float64"))
     out_I_float = np_as_located_field(IDim)(np.zeros((size), dtype=float64))
@@ -514,7 +541,7 @@ def test_ternary_operator():
     left = 2.0
     right = 3.0
 
-    @field_operator
+    @field_operator(backend=fieldview_backend)
     def ternary_field_op(
         a: Field[[IDim], float], b: Field[[IDim], float], left: float, right: float
     ) -> Field[[IDim], float]:
@@ -524,7 +551,7 @@ def test_ternary_operator():
     e = np.asarray(a_I_float) if left < right else np.asarray(b_I_float)
     np.allclose(e, out_I_float)
 
-    @field_operator
+    @field_operator(backend=fieldview_backend)
     def ternary_field_op_scalars(left: float, right: float) -> Field[[IDim], float]:
         return broadcast(3.0, (IDim,)) if left > right else broadcast(4.0, (IDim,))
 
@@ -533,7 +560,10 @@ def test_ternary_operator():
     np.allclose(e, out_I_float)
 
 
-def test_ternary_operator_tuple():
+def test_ternary_operator_tuple(fieldview_backend):
+    if fieldview_backend in [gtfn_cpu.run_gtfn, gtfn_cpu.run_gtfn_imperative]:
+        pytest.skip("Tuple return values are not supported in gtfn yet.")
+
     a_I_float = np_as_located_field(IDim)(np.random.randn(size).astype("float64"))
     b_I_float = np_as_located_field(IDim)(np.random.randn(size).astype("float64"))
     out_I_float = np_as_located_field(IDim)(np.zeros((size), dtype=float64))
@@ -542,7 +572,7 @@ def test_ternary_operator_tuple():
     left = 2.0
     right = 3.0
 
-    @field_operator
+    @field_operator(backend=fieldview_backend)
     def ternary_field_op(
         a: Field[[IDim], float], b: Field[[IDim], float], left: float, right: float
     ) -> tuple[Field[[IDim], float], Field[[IDim], float]]:
@@ -561,7 +591,7 @@ def test_ternary_operator_tuple():
     np.allclose(f, out_I_float_1)
 
 
-def test_ternary_builtin_neighbor_sum(reduction_setup):
+def test_ternary_builtin_neighbor_sum(fieldview_backend, reduction_setup):
     rs = reduction_setup
     Edge = rs.Edge
     Vertex = rs.Vertex
@@ -575,7 +605,7 @@ def test_ternary_builtin_neighbor_sum(reduction_setup):
     b = np_as_located_field(Edge)(2 * np.ones((num_edges,)))
     out = np_as_located_field(Vertex)(np.zeros((num_vertices,)))
 
-    @field_operator
+    @field_operator(backend=fieldview_backend)
     def ternary_reduce(a: Field[[Edge], float], b: Field[[Edge], float]) -> Field[[Vertex], float]:
         out = neighbor_sum(b(V2E) if 2 < 3 else a(V2E), axis=V2EDim)
         return out
@@ -591,14 +621,14 @@ def test_ternary_builtin_neighbor_sum(reduction_setup):
     assert np.allclose(expected, out)
 
 
-def test_ternary_scan():
+def test_ternary_scan(fieldview_backend):
     init = 0.0
     a_float = 4
     a = np_as_located_field(KDim)(a_float * np.ones((size,)))
     out = np_as_located_field(KDim)(np.zeros((size,)))
     expected = np.asarray([i if i <= a_float else a_float + 1 for i in range(1, size + 1)])
 
-    @scan_operator(axis=KDim, forward=True, init=init)
+    @scan_operator(backend=fieldview_backend, axis=KDim, forward=True, init=init)
     def simple_scan_operator(carry: float, a: float) -> float:
         return carry if carry > a else carry + 1.0
 
@@ -787,11 +817,17 @@ def test_domain_tuple(fieldview_backend):
 
 
 def test_where_k_offset(fieldview_backend):
-    if fieldview_backend in [gtfn_cpu.run_gtfn, gtfn_cpu.run_gtfn_imperative]:
-        pytest.skip("IndexFields are not supported yet.")
     a = np_as_located_field(IDim, KDim)(np.ones((size, size)))
     out = np_as_located_field(IDim, KDim)(np.zeros((size, size)))
     k_index = index_field(KDim)
+    if fieldview_backend in [gtfn_cpu.run_gtfn, gtfn_cpu.run_gtfn_imperative]:
+        warnings.warn(
+            "IndexFields not supported in gtfn backend. Using a memory backed field instead."
+        )
+        # TODO(tehrengruber): if we choose the wrong size here the gtfn backend
+        #  will happily executy, but give wrong results. we should implement
+        #  checks for such cases at some point.
+        k_index = np_as_located_field(KDim)(np.array([k_index.field_getitem(i) for i in range(size)]))
 
     @field_operator(backend=fieldview_backend)
     def fieldop_where_k_offset(

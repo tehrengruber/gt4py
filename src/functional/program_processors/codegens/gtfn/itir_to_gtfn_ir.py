@@ -157,14 +157,19 @@ def _collect_offset_definitions(
                 )
             else:
                 assert grid_type == common.GridType.UNSTRUCTURED
-                if not dim.kind == common.DimensionKind.VERTICAL:
+                if dim.kind == common.DimensionKind.LOCAL:
+                    offset_definitions[dim.value + "Dim"] = TagDefinition(
+                        name=Sym(id=dim.value + "Dim"), alias=SymRef(id=dim.value)
+                    )
+                elif dim.kind == common.DimensionKind.VERTICAL:
+                    # create alias from vertical offset to vertical dimension
+                    offset_definitions[offset_name] = TagDefinition(
+                        name=Sym(id=offset_name), alias=SymRef(id=dim.value)
+                    )
+                else:
                     raise ValueError(
                         "Mapping an offset to a horizontal dimension in unstructured is not allowed."
                     )
-                # create alias from vertical offset to vertical dimension
-                offset_definitions[offset_name] = TagDefinition(
-                    name=Sym(id=offset_name), alias=SymRef(id=dim.value)
-                )
         elif isinstance(dim_or_connectivity, common.Connectivity):
             assert grid_type == common.GridType.UNSTRUCTURED
             offset_definitions[offset_name] = TagDefinition(name=Sym(id=offset_name))
@@ -358,7 +363,14 @@ class GTFN_lowering(eve.NodeTranslator, eve.VisitorWithSymbolTableTrait):
         elif node.fun.id == "scan":
             raise ValueError("scans are only supported at the top level of a stencil closure")
 
-    def visit_FunCall(self, node: itir.FunCall, **kwargs: Any) -> Node:
+    def visit_FunCall(
+        self,
+        node: itir.FunCall,
+        *,
+        force_function_extraction: bool = False,
+        extracted_functions: Optional[list] = None,
+        **kwargs: Any
+    ) -> Node:
         if isinstance(node.fun, itir.SymRef):
             if node.fun.id in self._unary_op_map:
                 assert len(node.args) == 1
@@ -408,6 +420,16 @@ class GTFN_lowering(eve.NodeTranslator, eve.VisitorWithSymbolTableTrait):
                     tagged_offsets=domain_offsets,
                     connectivities=connectivities,
                 )  # type: ignore
+            elif node.fun.id == "reduce" and force_function_extraction:
+                assert extracted_functions is not None
+                fun_id = self.uids.sequential_id(prefix="_fun")
+                fun_def = FunctionDefinition(
+                    id=fun_id,
+                    params=[Sym(id="op"), Sym(id="init"), Sym(id="dim")],
+                    expr=FunCall(fun=SymRef(id="reduce"), args=[SymRef(id="op"), SymRef(id="init"), SymRef(id="dim")]),
+                )
+                extracted_functions.append(fun_def)
+                return SymRef(id=fun_id)
         if isinstance(node.fun, itir.FunCall):
             if node.fun.fun == itir.SymRef(id="shift"):
                 assert len(node.args) == 1
@@ -483,6 +505,8 @@ class GTFN_lowering(eve.NodeTranslator, eve.VisitorWithSymbolTableTrait):
             inputs=self.visit(node.inputs, **kwargs),
             backend=backend,
         )
+
+
 
     @staticmethod
     def _merge_scans(

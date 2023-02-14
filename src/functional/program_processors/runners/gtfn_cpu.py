@@ -19,12 +19,14 @@ from typing import Any, Callable, Final, Optional
 import numpy as np
 import numpy.typing as npt
 
+from eve.utils import content_hash
 from functional import common
+from functional.type_system.type_translation import from_value
 from functional.iterator import ir as itir
 from functional.otf import languages, stages, workflow
 from functional.otf.binding import cpp_interface, pybind
 from functional.otf.compilation import cache, compiler
-from functional.otf.compilation.build_systems import compiledb
+from functional.otf.compilation.build_systems import compiledb, cmake
 from functional.program_processors import processor_interface as ppi
 from functional.program_processors.codegens.gtfn import gtfn_module
 
@@ -62,11 +64,13 @@ def extract_connectivity_args(
 @dataclasses.dataclass(frozen=True)
 class GTFNExecutor(ppi.ProgramExecutor):
     language_settings: languages.LanguageWithHeaderFilesSettings = cpp_interface.CPP_DEFAULT
-    builder_factory: compiler.BuildSystemProjectGenerator = compiledb.CompiledbFactory()
+    builder_factory: compiler.BuildSystemProjectGenerator = cmake.CMakeFactory()
 
     name: Optional[str] = None
     enable_itir_transforms: bool = True  # TODO replace by more general mechanism, see https://github.com/GridTools/gt4py/issues/1135
     use_imperative_backend: bool = False
+
+    _cache: dict[int, Callable] = dataclasses.field(repr=False, init=False, default_factory=dict)
 
     def __call__(self, program: itir.FencilDefinition, *args: Any, **kwargs: Any) -> None:
         """
@@ -78,6 +82,16 @@ class GTFNExecutor(ppi.ProgramExecutor):
 
         See ``ProgramExecutorFunction`` for details.
         """
+        cache_key = hash(
+            (
+                program,
+                # TODO(tehrengruber): as the resulting frontend types contain lists they are
+                #  not hashable. As a workaround we just use content_hash here.
+                content_hash(tuple(from_value(arg) for arg in args)),
+                id(kwargs["offset_provider"]),
+                kwargs["column_axis"],
+            )
+        )
 
         def convert_args(inp: Callable) -> Callable:
             def decorated_program(*args):
@@ -88,22 +102,25 @@ class GTFNExecutor(ppi.ProgramExecutor):
 
             return decorated_program
 
-        otf_workflow: Final[workflow.Workflow[stages.ProgramCall, stages.CompiledProgram]] = (
-            gtfn_module.GTFNTranslationStep(
-                self.language_settings, self.enable_itir_transforms, self.use_imperative_backend
-            )
-            .chain(pybind.bind_source)
-            .chain(
-                compiler.Compiler(
-                    cache_strategy=cache.Strategy.SESSION, builder_factory=self.builder_factory
+        if cache_key not in self._cache:
+            otf_workflow: Final[workflow.Workflow[stages.ProgramCall, stages.CompiledProgram]] = (
+                gtfn_module.GTFNTranslationStep(
+                    self.language_settings, self.enable_itir_transforms, self.use_imperative_backend
                 )
+                .chain(pybind.bind_source)
+                .chain(
+                    compiler.Compiler(
+                        cache_strategy=cache.Strategy.PERSISTENT, builder_factory=self.builder_factory
+                    )
+                )
+                .chain(convert_args)
             )
-            .chain(convert_args)
-        )
 
-        otf_closure = stages.ProgramCall(program, args, kwargs)
+            otf_closure = stages.ProgramCall(program, args, kwargs)
 
-        compiled_runner = otf_workflow(otf_closure)
+            compiled_runner = otf_workflow(otf_closure)
+        else:
+            compiled_runner = self._cache[cache_key]
 
         compiled_runner(*args)
 

@@ -7,6 +7,7 @@ import copy
 import dataclasses
 import itertools
 import math
+from functools import cached_property
 from typing import (
     Any,
     Callable,
@@ -31,6 +32,7 @@ import numpy.typing as npt
 
 from eve import extended_typing as xtyping
 from functional import common
+from functional.common import DimensionKind
 from functional.iterator import builtins, runtime, utils
 
 
@@ -133,9 +135,6 @@ class ItIterator(Protocol):
     """
 
     def shift(self, *offsets: OffsetPart) -> ItIterator:
-        ...
-
-    def max_neighbors(self) -> int:
         ...
 
     def can_deref(self) -> bool:
@@ -321,25 +320,33 @@ def lift(stencil):
                     self.stencil, self.args, offsets=[*self.offsets, *offsets], elem=self.elem
                 )
 
-            def max_neighbors(self):
-                # TODO cleanup, test edge cases
-                open_offsets = get_open_offsets(*self.incomplete_offsets, *self.offsets)
-                assert open_offsets
-                return _get_connectivity(args[0].offset_provider, open_offsets[0]).max_neighbors
-
-            @property
+            @cached_property
             def incomplete_offsets(self):
-                incomplete_offsets = []
+                # TODO cleanup, test edge cases
+                inherited_open_offsets = []
                 for arg in self.args:
                     if arg.incomplete_offsets:
                         assert (
-                            not incomplete_offsets or incomplete_offsets == arg.incomplete_offsets
+                            not inherited_open_offsets
+                            or inherited_open_offsets == arg.incomplete_offsets
                         )
-                        incomplete_offsets = arg.incomplete_offsets
-                return incomplete_offsets
+                        inherited_open_offsets = arg.incomplete_offsets
+                # TODO: check order
+                _, incomplete_offets = group_offsets(*inherited_open_offsets, *self.offsets)
+                return incomplete_offets
+
+            @cached_property
+            def offset_provider(self):
+                offset_provider = None
+                for arg in self.args:
+                    if new_offset_provider := arg.offset_provider:
+                        offset_provider = new_offset_provider
+                return offset_provider
 
             def _shifted_args(self):
-                return tuple(map(lambda arg: arg.shift(*self.offsets), self.args))
+                if not self.offsets:
+                    return self.args
+                return tuple(arg.shift(*self.offsets) for arg in self.args)
 
             def can_deref(self):
                 shifted_args = self._shifted_args()
@@ -364,21 +371,20 @@ def lift(stencil):
 
 
 @builtins.reduce.register(EMBEDDED)
-def reduce(fun, init):
+def reduce(fun, init, axis):
     def sten(*iters):
         # TODO: assert check_that_all_iterators_are_compatible(*iters)
         first_it = iters[0]
-        n = first_it.max_neighbors()
         res = init
-        for i in range(n):
-            # we can check a single argument
-            # because all arguments share the same pattern
-            if not builtins.can_deref(builtins.shift(i)(first_it)):
-                break
+        i = 0
+        # we can check a single argument
+        # because all arguments share the same pattern
+        while builtins.can_deref(builtins.shift(axis, i)(first_it)):
             res = fun(
                 res,
-                *(builtins.deref(builtins.shift(i)(it)) for it in iters),
+                *(builtins.deref(builtins.shift(axis, i)(it)) for it in iters),
             )
+            i += 1
         return res
 
     return sten
@@ -566,10 +572,27 @@ def execute_shift(
     offset_implementation = offset_provider[tag]
     if isinstance(offset_implementation, common.Dimension):
         new_pos = copy.copy(pos)
+        if offset_implementation.value not in new_pos:
+            new_pos[offset_implementation.value] = 0
+
         if is_int_index(value := new_pos[offset_implementation.value]):
             new_pos[offset_implementation.value] = value + index
         else:
             raise AssertionError()
+
+        # If this is a local dimension limit the shift to `max_neighbors` of the respective
+        # non-local dimensions connectivity, i.e. for V2EDim use `max_neighbors` of the V2E
+        # connectivity. Otherwise a call to `reduce` of an iterator pointing to a sparse field
+        # never returns as it can be shifted indefinitely.
+        if offset_implementation.kind == DimensionKind.LOCAL:
+            linked_offset_provider = offset_provider[offset_implementation.value]
+            if not isinstance(linked_offset_provider, common.Connectivity):
+                raise ValueError(
+                    f"Offset provider for tag {offset_implementation.value} "
+                    f"must be a `Connectivity`, but got {type(linked_offset_provider)}."
+                )
+            if new_pos[offset_implementation.value] >= linked_offset_provider.max_neighbors:
+                return None
         return new_pos
     else:
         assert isinstance(offset_implementation, common.Connectivity)
@@ -578,6 +601,8 @@ def execute_shift(
         new_pos.pop(offset_implementation.origin_axis.value)
         cur_index = pos[offset_implementation.origin_axis.value]
         assert is_int_index(cur_index)
+        if index >= offset_implementation.max_neighbors:
+            return None
         if offset_implementation.mapped_index(cur_index, index) in [
             None,
             -1,
@@ -813,10 +838,6 @@ class MDIterator:
             column_axis=self.column_axis,
         )
 
-    def max_neighbors(self) -> int:
-        assert self.incomplete_offsets
-        return _get_connectivity(self.offset_provider, self.incomplete_offsets[0]).max_neighbors
-
     def can_deref(self) -> bool:
         return self.pos is not None
 
@@ -862,20 +883,7 @@ def make_in_iterator(
     *,
     column_axis: Optional[Tag],
 ) -> MDIterator:
-    axes = _get_axes(inp)
-    sparse_dimensions: list[Tag] = []
-    for axis in axes:
-        if isinstance(axis, runtime.Offset):
-            assert isinstance(axis.value, str)
-            sparse_dimensions.append(axis.value)
-        elif isinstance(axis, common.Dimension) and axis.kind == common.DimensionKind.LOCAL:
-            # we just use the name of the axis to match the offset literal for now
-            sparse_dimensions.append(axis.value)
-
     new_pos: Position = pos.copy()
-    for sparse_dim in set(sparse_dimensions):
-        init = [None] * sparse_dimensions.count(sparse_dim)
-        new_pos[sparse_dim] = init  # type: ignore[assignment] # looks like mypy is confused
     if column_axis is not None:
         # if we deal with column stencil the column position is just an offset by which the whole column needs to be shifted
         assert _column_range is not None
@@ -883,7 +891,7 @@ def make_in_iterator(
     return MDIterator(
         inp,
         new_pos,
-        incomplete_offsets=[SparseTag(x) for x in sparse_dimensions],
+        incomplete_offsets=[],
         offset_provider=offset_provider,
         column_axis=column_axis,
     )
@@ -1076,10 +1084,13 @@ def index_field(axis: common.Dimension, dtype: npt.DTypeLike = int) -> LocatedFi
 class ConstantField(LocatedField):
     def __init__(self, value: Any, dtype: npt.DTypeLike):
         self.value = value
-        self.dtype = np.dtype(dtype).type
+        self.dtype = np.dtype(dtype)
 
     def field_getitem(self, _: FieldIndexOrIndices) -> Any:
-        return self.dtype(self.value)
+        return self.dtype.type(self.value)
+
+    def __array__(self) -> np.ndarray:
+        return np.array(self.value)
 
     @property
     def axes(self) -> tuple[()]:
@@ -1098,6 +1109,57 @@ def shift(*offsets: Union[runtime.Offset, int]) -> Callable[[ItIterator], ItIter
         return it.shift(*list(o.value if isinstance(o, runtime.Offset) else o for o in offsets))
 
     return impl
+
+
+class IgnoreShiftIt:
+    def __init__(self, tag: runtime.Offset, it):
+        self.tag = tag
+        self.it = it
+
+    def shift(self, tag: runtime.Offset, index: IntIndex, *tail):
+        assert isinstance(self.tag.value, str)
+        if tag == self.tag.value:
+            return self
+
+        result = IgnoreShiftIt(self.tag, shift(tag, index)(self.it))
+        if tail:
+            return shift(*tail)(result)
+        return result
+
+    def __getattr__(self, item):
+        return getattr(self.it, item)
+
+
+@builtins.ignore_shift.register(EMBEDDED)
+def ignore_shift(tag: runtime.Offset) -> Callable[[ItIterator], IgnoreShiftIt]:
+    return lambda it: IgnoreShiftIt(tag, it)
+
+
+class TranslateShiftIt:
+    def __init__(self, tag: runtime.Offset, new_tag: runtime.Offset, it):
+        self.tag = tag
+        self.new_tag = new_tag
+        self.it = it
+
+    def shift(self, tag: Tag, index: IntIndex, *tail):
+        assert isinstance(self.tag.value, str) and isinstance(self.new_tag.value, str)
+        if tag == self.tag.value:
+            tag = self.new_tag.value
+
+        result = TranslateShiftIt(self.tag, self.new_tag, shift(tag, index)(self.it))
+        if tail:
+            return shift(*tail)(result)
+        return result
+
+    def __getattr__(self, item):
+        return getattr(self.it, item)
+
+
+@builtins.translate_shift.register(EMBEDDED)
+def translate_shift(
+    tag: runtime.Offset, new_tag: runtime.Offset
+) -> Callable[[ItIterator], TranslateShiftIt]:
+    return lambda it: TranslateShiftIt(tag, new_tag, it)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -1253,11 +1315,13 @@ def _dimension_to_tag(domain: Domain) -> dict[Tag, range]:
 
 
 def _validate_domain(domain: Domain, offset_provider: OffsetProvider) -> None:
-    if isinstance(domain, runtime.CartesianDomain):
-        if any(isinstance(o, common.Connectivity) for o in offset_provider.values()):
-            raise RuntimeError(
-                "Got a `CartesianDomain`, but found a `Connectivity` in `offset_provider`, expected `UnstructuredDomain`."
-            )
+    pass
+    # TODO(tehrengruber): instead of this check for shifts
+    # if isinstance(domain, runtime.CartesianDomain):
+    #    if any(isinstance(o, common.Connectivity) for o in offset_provider.values()):
+    #        raise RuntimeError(
+    #            "Got a `CartesianDomain`, but found a `Connectivity` in `offset_provider`, expected `UnstructuredDomain`."
+    #        )
 
 
 def fendef_embedded(fun: Callable[..., None], *args: Any, **kwargs: Any):

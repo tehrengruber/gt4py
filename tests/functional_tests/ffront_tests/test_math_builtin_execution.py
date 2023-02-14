@@ -9,7 +9,8 @@ from functional.ffront.decorator import FieldOperator
 from functional.ffront.fbuiltins import Dimension, Field, float64
 from functional.ffront.foast_passes.type_deduction import FieldOperatorTypeDeduction
 from functional.iterator.embedded import np_as_located_field
-from functional.program_processors.runners import roundtrip
+from functional.program_processors.processor_interface import ProgramExecutor
+from functional.program_processors.runners import gtfn_cpu, roundtrip
 from functional.type_system import type_translation
 
 from ..iterator_tests.math_builtin_test_data import math_builtin_test_data
@@ -23,7 +24,7 @@ from .ffront_test_utils import *
 #  becomes easier.
 
 
-def make_builtin_field_operator(builtin_name: str):
+def make_builtin_field_operator(builtin_name: str, backend: ProgramExecutor):
     # TODO(tehrengruber): creating a field operator programmatically should be
     #  easier than what we need to do here.
     # construct annotation dictionary containing the input argument and return

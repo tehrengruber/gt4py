@@ -2,6 +2,7 @@ import dataclasses
 from collections.abc import Iterable, Iterator
 from typing import TypeGuard
 
+from functools import reduce
 from eve import NodeTranslator
 from eve.utils import UIDGenerator
 from functional import common
@@ -38,54 +39,8 @@ def _get_shifted_args(reduce_args: Iterable[itir.Expr]) -> Iterator[itir.FunCall
     )
 
 
-def _is_list_of_funcalls(lst: list) -> TypeGuard[list[itir.FunCall]]:
-    return all(isinstance(f, itir.FunCall) for f in lst)
-
-
-def _get_partial_offset_tag(arg: itir.FunCall) -> str:
-    if _is_shifted(arg):
-        assert isinstance(arg.fun, itir.FunCall)
-        offset = arg.fun.args[-1]
-        assert isinstance(offset, itir.OffsetLiteral)
-        assert isinstance(offset.value, str)
-        return offset.value
-    else:
-        assert _is_applied_lift(arg)
-        assert _is_list_of_funcalls(arg.args)
-        partial_offsets = [_get_partial_offset_tag(arg) for arg in arg.args]
-        assert all(o == partial_offsets[0] for o in partial_offsets)
-        return partial_offsets[0]
-
-
-def _get_partial_offset_tags(reduce_args: Iterable[itir.Expr]) -> Iterable[str]:
-    return [_get_partial_offset_tag(arg) for arg in _get_shifted_args(reduce_args)]
-
-
-def _is_reduce(node: itir.FunCall) -> TypeGuard[itir.FunCall]:
+def _is_reduce(node: itir.FunCall):
     return isinstance(node.fun, itir.FunCall) and node.fun.fun == itir.SymRef(id="reduce")
-
-
-def _get_connectivity(
-    applied_reduce_node: itir.FunCall,
-    offset_provider: dict[str, common.Dimension | common.Connectivity],
-) -> common.Connectivity:
-    """Return single connectivity that is compatible with the arguments of the reduce."""
-    if not _is_reduce(applied_reduce_node):
-        raise ValueError("Expected a call to a `reduce` object, i.e. `reduce(...)(...)`.")
-
-    connectivities: list[common.Connectivity] = []
-    for o in _get_partial_offset_tags(applied_reduce_node.args):
-        conn = offset_provider[o]
-        assert isinstance(conn, common.Connectivity)
-        connectivities.append(conn)
-
-    if not connectivities:
-        raise RuntimeError("Couldn't detect partial shift in any arguments of reduce.")
-
-    if len({(c.max_neighbors, c.has_skip_values) for c in connectivities}) != 1:
-        # The condition for this check is required but not sufficient: the actual neighbor tables could still be incompatible.
-        raise RuntimeError("Arguments to reduce have incompatible partial shifts.")
-    return connectivities[0]
 
 
 def _make_shift(offsets: list[itir.Expr], iterator: itir.Expr):
@@ -116,39 +71,58 @@ class UnrollReduce(NodeTranslator):
     uids: UIDGenerator = dataclasses.field(init=False, repr=False, default_factory=UIDGenerator)
 
     @classmethod
-    def apply(cls, node: itir.Node, **kwargs):
+    def apply(cls, node:itir.Node, **kwargs):
         return cls().visit(node, **kwargs)
 
-    def visit_FunCall(self, node: itir.FunCall, **kwargs):
+    def visit_FunCall(self, node:itir.FunCall, **kwargs):
         node = self.generic_visit(node, **kwargs)
         if not _is_reduce(node):
             return node
 
+        assert isinstance(node.fun,itir.FunCall)
+        assert len(node.fun.args) == 3
+        assert isinstance(node.fun.args[2],itir.OffsetLiteral) and isinstance(
+            node.fun.args[2].value, str
+        )
+
         offset_provider = kwargs["offset_provider"]
         assert offset_provider is not None
-        connectivity = _get_connectivity(node, offset_provider)
+        connectivity = offset_provider[
+            node.fun.args[2].value[:-3]
+        ]  # TODO(tehrengruber): find a better way to remove Dim
         max_neighbors = connectivity.max_neighbors
         has_skip_values = connectivity.has_skip_values
 
-        acc = itir.SymRef(id=self.uids.sequential_id(prefix="_acc"))
-        offset = itir.SymRef(id=self.uids.sequential_id(prefix="_i"))
-        step = itir.SymRef(id=self.uids.sequential_id(prefix="_step"))
+        acc =itir.SymRef(id=self.uids.sequential_id(prefix="_acc"))
+        offset =itir.SymRef(id=self.uids.sequential_id(prefix="_i"))
+        step =itir.SymRef(id=self.uids.sequential_id(prefix="_step"))
+        shifted_args = [
+           itir.SymRef(id=self.uids.sequential_id(prefix="_shifted_arg")) for _ in node.args
+        ]
 
-        assert isinstance(node.fun, itir.FunCall)
-        fun, init = node.fun.args
+        assert isinstance(node.fun,itir.FunCall)
+        fun, init, axis = node.fun.args
 
-        derefed_shifted_args = [_make_deref(_make_shift([offset], arg)) for arg in node.args]
-        step_fun: itir.Expr = itir.FunCall(fun=fun, args=[acc] + derefed_shifted_args)
+        shifted_args_expr = [_make_shift([axis, offset], arg) for arg in node.args]
+        derefed_shifted_args = [_make_deref(shifted_arg) for shifted_arg in shifted_args]
+        step_fun: itir.Expr =itir.FunCall(fun=fun, args=[acc] + derefed_shifted_args)
         if has_skip_values:
-            check_arg = next(_get_shifted_args(node.args))
-            can_deref = _make_can_deref(_make_shift([offset], check_arg))
+            can_deref = reduce(
+                lambda prev, el:itir.FunCall(fun=itir.SymRef("and"), args=[prev, _make_can_deref(el)]),
+                shifted_args[1:],
+                _make_can_deref(shifted_args[0]),
+            )
             step_fun = _make_if(can_deref, step_fun, acc)
-        step_fun = itir.Lambda(params=[itir.Sym(id=acc.id), itir.Sym(id=offset.id)], expr=step_fun)
+        step_fun =itir.FunCall(
+            fun=itir.Lambda(
+                params=[itir.Sym(id=shifted_arg.id) for shifted_arg in shifted_args], expr=step_fun
+            ),
+            args=shifted_args_expr,
+        )
+        step_fun =itir.Lambda(params=[itir.Sym(id=acc.id), itir.Sym(id=offset.id)], expr=step_fun)
         expr = init
         for i in range(max_neighbors):
-            expr = itir.FunCall(fun=step, args=[expr, itir.OffsetLiteral(value=i)])
-        expr = itir.FunCall(
-            fun=itir.Lambda(params=[itir.Sym(id=step.id)], expr=expr), args=[step_fun]
-        )
+            expr =itir.FunCall(fun=step, args=[expr,itir.OffsetLiteral(value=i)])
+        expr =itir.FunCall(fun=itir.Lambda(params=[itir.Sym(id=step.id)], expr=expr), args=[step_fun])
 
         return expr

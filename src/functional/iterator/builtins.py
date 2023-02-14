@@ -25,6 +25,16 @@ def shift(*args):
 
 
 @builtin_dispatch
+def ignore_shift(*args):
+    raise BackendNotSelectedError()
+
+
+@builtin_dispatch
+def translate_shift(*args):
+    raise BackendNotSelectedError()
+
+
+@builtin_dispatch
 def lift(*args):
     raise BackendNotSelectedError()
 
@@ -366,6 +376,8 @@ BUILTINS = {
     "deref",
     "can_deref",
     "shift",
+    "ignore_shift",
+    "translate_shift",
     "lift",
     "reduce",
     "plus",

@@ -81,7 +81,8 @@ def reduction_setup():
             [6, 12, 8, 15],  # 6
             [7, 13, 6, 16],
             [8, 14, 7, 17],
-        ]
+        ],
+        dtype=np.int32,
     )
 
     # create e2v connectivity by inverting v2e
@@ -91,7 +92,11 @@ def reduction_setup():
         for e in v2e_arr[v]:
             e2v_arr[e].append(v)
     assert all(len(row) == 2 for row in e2v_arr)
-    e2v_arr = np.asarray(e2v_arr)
+    e2v_arr = np.asarray(e2v_arr, dtype=np.int32)
+
+    inp = index_field(edge, dtype=np.int64)
+    # TODO(tehrengruber): use index field
+    inp = np_as_located_field(edge)(np.array([inp.field_getitem(i) for i in range(num_edges)]))
 
     yield namedtuple(
         "ReductionSetup",
@@ -119,11 +124,13 @@ def reduction_setup():
         E2VDim=e2vdim,
         V2E=FieldOffset("V2E", source=edge, target=(vertex, v2edim)),
         E2V=FieldOffset("E2V", source=vertex, target=(edge, e2vdim)),
-        inp=index_field(edge, dtype=np.int64),
+        inp=inp,
         out=np_as_located_field(vertex)(np.zeros([num_vertices], dtype=np.int64)),
         offset_provider={
             "V2E": NeighborTableOffsetProvider(v2e_arr, vertex, edge, 4),
             "E2V": NeighborTableOffsetProvider(e2v_arr, edge, vertex, 2, has_skip_values=False),
+            "V2EDim": v2edim,
+            "E2VDim": e2vdim,
         },
         v2e_table=v2e_arr,
         e2v_table=e2v_arr,

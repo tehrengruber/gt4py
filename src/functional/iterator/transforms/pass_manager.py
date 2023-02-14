@@ -8,9 +8,14 @@ from functional.iterator.transforms.global_tmps import CreateGlobalTmps
 from functional.iterator.transforms.inline_fundefs import InlineFundefs, PruneUnreferencedFundefs
 from functional.iterator.transforms.inline_lambdas import InlineLambdas
 from functional.iterator.transforms.inline_lifts import InlineLifts
+from functional.iterator.transforms.inline_tuple_get import InlineTupleGet
 from functional.iterator.transforms.merge_let import MergeLet
 from functional.iterator.transforms.normalize_shifts import NormalizeShifts
 from functional.iterator.transforms.propagate_deref import PropagateDeref
+from functional.iterator.transforms.shift_transformer import (
+    PropagateShiftTransformer,
+    RemoveShiftsTransformer,
+)
 from functional.iterator.transforms.unroll_reduce import UnrollReduce
 
 
@@ -37,7 +42,6 @@ def apply_common_transforms(
     offset_provider=None,
     unroll_reduce=False,
     common_subexpression_elimination=True,
-    force_inline_lift=False,
 ):
     if lift_mode is None:
         lift_mode = LiftMode.FORCE_INLINE
@@ -55,6 +59,10 @@ def apply_common_transforms(
                 opcount_preserving=True,
                 force_inline_lift=(lift_mode == LiftMode.FORCE_INLINE),
             )
+            inlined = PropagateDeref.apply(inlined)
+            inlined = InlineTupleGet.apply(inlined)
+            inlined = RemoveShiftsTransformer.apply(inlined)
+            inlined = PropagateShiftTransformer.apply(inlined)
             if inlined == ir:
                 break
             ir = inlined
@@ -68,16 +76,20 @@ def apply_common_transforms(
     ir = NormalizeShifts().visit(ir)
 
     if unroll_reduce:
+        ir = UnrollReduce.apply(ir, offset_provider=offset_provider)
         for _ in range(10):
-            unrolled = UnrollReduce.apply(ir, offset_provider=offset_provider)
-            if unrolled == ir:
+            inlined = NormalizeShifts().visit(ir)
+            inlined = _inline_lifts(inlined, lift_mode)
+            inlined = InlineLambdas.apply(inlined, opcount_preserving=True, force_inline_lift=True)
+            inlined = NormalizeShifts().visit(inlined)
+            inlined = RemoveShiftsTransformer.apply(inlined)
+            inlined = PropagateShiftTransformer.apply(inlined)
+            if inlined == ir:
                 break
-            ir = unrolled
-            ir = NormalizeShifts().visit(ir)
-            ir = _inline_lifts(ir, lift_mode)
-            ir = NormalizeShifts().visit(ir)
+            ir = inlined
         else:
-            raise RuntimeError("Reduction unrolling failed.")
+            raise RuntimeError("Inlining lift did not converge.")
+
     if lift_mode != LiftMode.FORCE_INLINE:
         assert offset_provider is not None
         ir = CreateGlobalTmps().visit(ir, offset_provider=offset_provider)
