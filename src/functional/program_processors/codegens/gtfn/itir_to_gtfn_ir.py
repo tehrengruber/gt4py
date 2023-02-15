@@ -159,7 +159,7 @@ def _collect_offset_definitions(
                 assert grid_type == common.GridType.UNSTRUCTURED
                 if dim.kind == common.DimensionKind.LOCAL:
                     offset_definitions[dim.value + "Dim"] = TagDefinition(
-                        name=Sym(id=dim.value + "Dim"), alias=SymRef(id=dim.value)
+                        name=Sym(id=dim.value + "Dim")
                     )
                 elif dim.kind == common.DimensionKind.VERTICAL:
                     # create alias from vertical offset to vertical dimension

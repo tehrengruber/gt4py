@@ -24,7 +24,7 @@ from .ffront_test_utils import *
 #  becomes easier.
 
 
-def make_builtin_field_operator(builtin_name: str, backend: ProgramExecutor):
+def make_builtin_field_operator(builtin_name: str):
     # TODO(tehrengruber): creating a field operator programmatically should be
     #  easier than what we need to do here.
     # construct annotation dictionary containing the input argument and return
