@@ -54,7 +54,7 @@ class FrozenList(Tuple[_Tc, ...], metaclass=abc.ABCMeta):  # noqa: B024   # no a
 
 
 if sys.version_info >= (3, 9):
-    frozendict: TypeAlias = _frozendict  # type: ignore[valid-type]
+    frozendict: TypeAlias = _frozendict
 else:
     _KeyT = TypeVar("_KeyT")
 

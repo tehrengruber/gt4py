@@ -102,6 +102,8 @@ class GTFNCodegen(codegen.TemplatedGenerator):
     def visit_Literal(self, node: gtfn_ir.Literal, **kwargs: Any) -> str:
         match pytype_to_cpptype(node.type):
             case "int":
+                if any(item in ["std::min", "std::max"] for item in kwargs.values()):
+                    return node.value
                 return node.value + "_c"
             case "float":
                 return self.asfloat(node.value) + "f"

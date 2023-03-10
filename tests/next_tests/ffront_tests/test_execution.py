@@ -682,7 +682,7 @@ def test_domain(fieldview_backend):
     def fieldop_domain(a: Field[[IDim, JDim], float64]) -> Field[[IDim, JDim], float64]:
         return a + a
 
-    @program
+    @program(backend=fieldview_backend)
     def program_domain(a: Field[[IDim, JDim], float64]):
         fieldop_domain(a, out=a, domain={IDim: (1, 9), JDim: (4, 6)})
 
@@ -708,7 +708,7 @@ def test_domain_input_bounds(fieldview_backend):
     def fieldop_domain(a: Field[[IDim, JDim], float64]) -> Field[[IDim, JDim], float64]:
         return a + a
 
-    @program
+    @program(backend=fieldview_backend)
     def program_domain(
         a: Field[[IDim, JDim], float64],
         lower_i: int64,
