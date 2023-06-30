@@ -22,6 +22,7 @@ import typing
 from typing import Any, Callable, Literal, Optional, Protocol, TypeAlias
 
 import numpy as np
+import cupy as cp
 import pytest
 
 import gt4py.next as gtx
@@ -123,7 +124,7 @@ class ConstInitializer(DataInitializer):
         dtype: np.typing.DTypeLike,
     ) -> FieldValue:
         return gtx.np_as_located_field(*sizes.keys())(
-            np.full(tuple(sizes.values()), self.value, dtype=dtype)
+            cp.full(tuple(sizes.values()), self.value, dtype=dtype)
         )
 
 
@@ -163,7 +164,7 @@ class UniqueInitializer(DataInitializer):
         n_data = int(np.prod(svals))
         self.start += n_data
         return gtx.np_as_located_field(*sizes.keys())(
-            np.arange(start, start + n_data, dtype=dtype).reshape(svals)
+            cp.arange(start, start + n_data, dtype=dtype).reshape(svals)
         )
 
     def from_case(
@@ -381,8 +382,8 @@ def verify(
     out_comp_str = str(out_comp)
     assert out_comp is not None
     if hasattr(out_comp, "array"):
-        out_comp_str = str(out_comp.array())
-    assert comparison(ref, out_comp), (
+        out_comp_str = str(out_comp.array2)
+    assert bool(comparison(ref, out_comp.array2)), (
         f"Verification failed:\n"
         f"\tcomparison={comparison.__name__}(ref, out)\n"
         f"\tref = {ref}\n\tout = {out_comp_str}"
@@ -411,7 +412,7 @@ def verify_with_default_data(
             ``comparison(ref, <out | inout>)`` and should return a boolean.
     """
     inps, kwfields = get_default_data(case, fieldop)
-    ref_args = tuple(i.array() if hasattr(i, "array") else i for i in inps)
+    ref_args = tuple(i.array2 if hasattr(i, "array2") else i for i in inps)
     verify(
         case,
         fieldop,

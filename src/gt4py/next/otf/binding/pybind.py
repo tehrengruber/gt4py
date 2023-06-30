@@ -89,7 +89,7 @@ def _type_string(type_: ts.TypeSpec) -> str:
     if isinstance(type_, ts.TupleType):
         return f"std::tuple<{','.join(_type_string(t) for t in type_.types)}>"
     elif isinstance(type_, ts.FieldType):
-        return "pybind11::buffer"
+        return "pybind11::object"
     elif isinstance(type_, ts.ScalarType):
         return cpp_interface.render_scalar_type(type_)
     else:
@@ -148,7 +148,7 @@ class BindingCodeGenerator(TemplatedGenerator):
 
     BufferSID = as_jinja(
         """gridtools::sid::rename_numbered_dimensions<{{", ".join(dimensions)}}>(
-                gridtools::as_sid<{{rendered_scalar_type}},\
+                gridtools::as_cuda_sid<{{rendered_scalar_type}},\
                                   {{dimensions.__len__()}},\
                                   gridtools::sid::unknown_kind>({{source_buffer}})
             )"""

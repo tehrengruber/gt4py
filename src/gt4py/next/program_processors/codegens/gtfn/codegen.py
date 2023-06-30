@@ -214,12 +214,21 @@ class GTFNCodegen(codegen.TemplatedGenerator):
 
     def _block_sizes(self, offset_definitions: list[gtfn_ir.TagDefinition]) -> str:
         block_dims = []
-        block_sizes = [32, 8, 1]
-        for i, tag in enumerate(offset_definitions):
+        #block_sizes = [32, 8, 1]
+        block_sizes = {
+            "gtfn::unstructured::dim::horizontal": 128,
+            "gtfn::unstructured::dim::vertical": 4
+        }
+        for tag, block_size in block_sizes.items():
             block_dims.append(
-                f"gridtools::meta::list<{tag.name.id}_t, "
-                f"gridtools::integral_constant<int, {block_sizes[i]}>>"
+                f"gridtools::meta::list<{tag}, "
+                f"gridtools::integral_constant<int, {block_size}>>"
             )
+        #for i, tag in enumerate(offset_definitions):
+        #    block_dims.append(
+        #        f"gridtools::meta::list<{tag.name.id}_t, "
+        #        f"gridtools::integral_constant<int, {block_sizes[tag.alias]}>>"
+        #    )
         sizes_str = ",\n".join(block_dims)
         return f"using block_sizes_t = gridtools::meta::list<{sizes_str}>;"
 

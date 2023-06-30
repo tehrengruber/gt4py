@@ -880,11 +880,13 @@ class LocatedFieldImpl(MutableLocatedField):
         *,
         setter: Callable[[FieldIndexOrIndices, Any], None],
         array: Callable[[], npt.NDArray],
+        array2: npt.NDArray
     ):
         self.getter = getter
         self._axes = axes
         self.setter = setter
         self.array = array
+        self.array2 = array2
         self.dtype = dtype
 
     def __getitem__(self, indices: ArrayIndexOrIndices) -> Any:
@@ -908,7 +910,7 @@ class LocatedFieldImpl(MutableLocatedField):
     def shape(self):
         if self.array is None:
             raise TypeError("`shape` not supported for this field")
-        return self.array().shape
+        return self.array2.shape
 
 
 def _is_field_axis(axis: Axis) -> TypeGuard[FieldAxis]:
@@ -1020,6 +1022,7 @@ def np_as_located_field(
             dtype=a.dtype,
             setter=setter,
             array=a.__array__,
+            array2=a
         )
 
     return _maker

@@ -103,15 +103,17 @@ def test_unstructured_shift(unstructured_case):  # noqa: F811 # fixtures
 
 
 def test_composed_unstructured_shift(reduction_setup, fieldview_backend):
+
+    import cupy as cp
     E2V = reduction_setup.E2V
     C2E = reduction_setup.C2E
     e2v_table = reduction_setup.offset_provider["E2V"].table[slice(0, None), 0]
     c2e_table = reduction_setup.offset_provider["C2E"].table[slice(0, None), 0]
 
     a = gtx.np_as_located_field(Vertex)(
-        np.arange(0, reduction_setup.num_vertices, dtype=np.float64)
+        cp.arange(0, reduction_setup.num_vertices, dtype=np.float64)
     )
-    b = gtx.np_as_located_field(Cell)(np.zeros(reduction_setup.num_cells))
+    b = gtx.np_as_located_field(Cell)(cp.zeros(reduction_setup.num_cells))
 
     @gtx.field_operator(backend=fieldview_backend)
     def composed_shift_unstructured_flat(
@@ -136,7 +138,7 @@ def test_composed_unstructured_shift(reduction_setup, fieldview_backend):
     ) -> gtx.Field[[Cell], float64]:
         return shift_e2v(inp)(C2E[0])
 
-    ref = np.asarray(a)[e2v_table][c2e_table]
+    ref = cp.asarray(a.array2)[e2v_table][c2e_table]
 
     for field_op in [
         composed_shift_unstructured_flat,
@@ -145,7 +147,7 @@ def test_composed_unstructured_shift(reduction_setup, fieldview_backend):
     ]:
         field_op(a, out=b, offset_provider=reduction_setup.offset_provider)
 
-        assert np.allclose(b, ref)
+        assert np.allclose(b.array2, ref)
 
 
 def test_fold_shifts(cartesian_case):  # noqa: F811 # fixtures

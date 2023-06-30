@@ -14,11 +14,12 @@
 
 from typing import Any
 
-from gt4py.next.otf import languages
+from gt4py.eve.utils import content_hash
+from gt4py.next.otf import languages, stages, workflow
 from gt4py.next.program_processors import otf_compile_executor
 from gt4py.next.program_processors.codegens.gtfn import gtfn_module
 from gt4py.next.program_processors.runners import gtfn_cpu
-
+from gt4py.next.type_system.type_translation import from_value
 
 CPP_WITH_CUDA = languages.LanguageWithHeaderFilesSettings(
     formatter_key="cpp",
@@ -38,3 +39,25 @@ gtfn_gpu: otf_compile_executor.OTFCompileExecutor[
         ),
     ),
 )
+
+def compilation_hash(otf_closure: stages.ProgramCall) -> int:
+    """Given closure compute a hash uniquely determining if we need to recompile."""
+    offset_provider = otf_closure.kwargs["offset_provider"]
+    return hash(
+        (
+            otf_closure.program,
+            # As the frontend types contain lists they are not hashable. As a workaround we just
+            # use content_hash here.
+            content_hash(tuple(from_value(arg) for arg in otf_closure.args)),
+            id(offset_provider) if offset_provider else None,
+            otf_closure.kwargs.get("column_axis", None),
+        )
+    )
+
+gtfn_gpu_cached = otf_compile_executor.CachedOTFCompileExecutor[
+    languages.Cpp, languages.LanguageWithHeaderFilesSettings, languages.Python, Any
+](
+    name="gpu_backend_cached",
+    otf_workflow=workflow.CachedStep(step=gtfn_gpu.otf_workflow, hash_function=compilation_hash),
+)  # todo(ricoh): add API for converting an executor to a cached version of itself and vice versa
+

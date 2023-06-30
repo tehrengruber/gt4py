@@ -18,13 +18,14 @@ from collections import namedtuple
 from typing import TypeVar
 
 import numpy as np
+import cupy as cp
 import pytest
 
 import gt4py.next as gtx
-from gt4py.next.program_processors.runners import gtfn_cpu, roundtrip
+from gt4py.next.program_processors.runners import gtfn_cpu, gtfn_gpu, roundtrip
 
 
-@pytest.fixture(params=[roundtrip.executor, gtfn_cpu.run_gtfn, gtfn_cpu.run_gtfn_imperative])
+@pytest.fixture(params=[gtfn_gpu.gtfn_gpu])
 def fieldview_backend(request):
     yield request.param
 
@@ -66,7 +67,7 @@ def reduction_setup():
     c2vdim = gtx.Dimension("C2V", kind=gtx.DimensionKind.LOCAL)
     c2edim = gtx.Dimension("C2E", kind=gtx.DimensionKind.LOCAL)
 
-    v2e_arr = np.array(
+    v2e_arr = cp.array(
         [
             [0, 15, 2, 9],  # 0
             [1, 16, 0, 10],
@@ -80,7 +81,7 @@ def reduction_setup():
         ]
     )
 
-    c2v_arr = np.array(
+    c2v_arr = cp.array(
         [
             [0, 1, 4, 3],
             [1, 2, 5, 6],
@@ -93,7 +94,7 @@ def reduction_setup():
         ]
     )
 
-    c2e_arr = np.array(
+    c2e_arr = cp.array(
         [
             [0, 10, 3, 9],
             [1, 11, 4, 10],
@@ -107,13 +108,13 @@ def reduction_setup():
     )
 
     # create e2v connectivity by inverting v2e
-    num_edges = np.max(v2e_arr) + 1
+    num_edges = int(cp.max(v2e_arr) + 1)
     e2v_arr = [[] for _ in range(0, num_edges)]
     for v in range(0, v2e_arr.shape[0]):
         for e in v2e_arr[v]:
-            e2v_arr[e].append(v)
+            e2v_arr[int(e)].append(v)
     assert all(len(row) == 2 for row in e2v_arr)
-    e2v_arr = np.asarray(e2v_arr)
+    e2v_arr = cp.asarray(e2v_arr)
 
     yield namedtuple(
         "ReductionSetup",
