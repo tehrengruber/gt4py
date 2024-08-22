@@ -1414,7 +1414,10 @@ def reduce(fun, init):
         # TODO: assert check_that_all_lists_are_compatible(*lists)
         lst = None
         for cur in lists:
-            if isinstance(cur, _List):
+            # TODO(tehrengruber): here we get a tuple when the input to the current as_fieldop is
+            #  the result of another as_fieldop that should return a "field of lists".
+            #  see test_nested_reduction
+            if isinstance(cur, (_List, tuple)):
                 lst = cur
                 break
         # we can check a single argument for length,
