@@ -7,10 +7,9 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 import typing
-from typing import Callable, Iterable, Optional, Union
+from typing import Callable, Optional, Union
 
 from gt4py._core import definitions as core_defs
-from gt4py.eve.extended_typing import Dict, Tuple
 from gt4py.next import Field, common
 from gt4py.next.iterator import ir as itir
 from gt4py.next.type_system import type_specifications as ts, type_translation
@@ -81,6 +80,8 @@ def ensure_expr(literal_or_expr: Union[str, core_defs.Scalar, itir.Expr]) -> iti
         return ref(literal_or_expr)
     elif core_defs.is_scalar_type(literal_or_expr):
         return literal_from_value(literal_or_expr)
+    elif literal_or_expr is None:
+        return itir.NoneLiteral()
     assert isinstance(literal_or_expr, itir.Expr)
     return literal_or_expr
 
@@ -241,13 +242,40 @@ def tuple_get(index: str | int, tuple_expr):
 
 
 def if_(cond, true_val, false_val):
-    """Create a not_ FunCall, shorthand for ``call("if_")(expr)``."""
+    """Create a if_ FunCall, shorthand for ``call("if_")(expr)``."""
     return call("if_")(cond, true_val, false_val)
+
+
+def cond(cond, true_val, false_val):
+    """Create a cond FunCall, shorthand for ``call("cond")(expr)``."""
+    return call("cond")(cond, true_val, false_val)
 
 
 def lift(expr):
     """Create a lift FunCall, shorthand for ``call(call("lift")(expr))``."""
     return call(call("lift")(expr))
+
+
+def as_fieldop(expr: itir.Expr, domain: Optional[itir.FunCall] = None) -> call:
+    """
+    Create an `as_fieldop` call.
+    Examples
+    --------
+    >>> str(as_fieldop(lambda_("it1", "it2")(plus(deref("it1"), deref("it2"))))("field1", "field2"))
+    '(⇑(λ(it1, it2) → ·it1 + ·it2))(field1, field2)'
+    """
+    return call(
+        call("as_fieldop")(
+            *(
+                (
+                    expr,
+                    domain,
+                )
+                if domain
+                else (expr,)
+            )
+        )
+    )
 
 
 class let:
@@ -266,7 +294,7 @@ class let:
     def __init__(self, var: str | itir.Sym, init_form: itir.Expr | str): ...
 
     @typing.overload
-    def __init__(self, *args: Iterable[tuple[str | itir.Sym, itir.Expr | str]]): ...
+    def __init__(self, *args: tuple[str | itir.Sym, itir.Expr | str]): ...
 
     def __init__(self, *args):
         if all(isinstance(arg, tuple) and len(arg) == 2 for arg in args):
@@ -356,6 +384,18 @@ def lifted_neighbors(offset, it) -> itir.Expr:
     return lift(lambda_("it")(neighbors(offset, "it")))(it)
 
 
+def as_fieldop_neighbors(offset, it) -> itir.Expr:
+    """
+    Create a fieldop for neighbors call.
+
+    Examples
+    --------
+    >>> str(as_fieldop_neighbors("off", "a"))
+    '(⇑(λ(it) → neighbors(offₒ, it)))(a)'
+    """
+    return as_fieldop(lambda_("it")(neighbors(offset, "it")))(it)
+
+
 def promote_to_const_iterator(expr: str | itir.Expr) -> itir.Expr:
     """
     Create a lifted nullary lambda that captures `expr`.
@@ -394,14 +434,9 @@ def promote_to_lifted_stencil(op: str | itir.SymRef | Callable) -> Callable[...,
     return _impl
 
 
-def map_(op):
-    """Create a `map_` call."""
-    return call(call("map_")(op))
-
-
 def domain(
     grid_type: Union[common.GridType, str],
-    ranges: Dict[Union[common.Dimension, str], Tuple[itir.Expr, itir.Expr]],
+    ranges: dict[Union[common.Dimension, str], tuple[itir.Expr, itir.Expr]],
 ) -> itir.FunCall:
     """
     >>> str(
@@ -435,34 +470,6 @@ def domain(
     )
 
 
-def cond(cond: bool, ture_field: Field, false_field: Field) -> call:
-    """Create a FunCall, shorthand for ``call("cond")(cond, true_fiel, false_field)``."""
-    return call("cond")(cond, ture_field, false_field)
-
-
-def as_fieldop(expr: itir.Expr, domain: Optional[itir.FunCall] = None) -> call:
-    """
-    Create an `as_fieldop` call.
-
-    Examples
-    --------
-    >>> str(as_fieldop(lambda_("it1", "it2")(plus(deref("it1"), deref("it2"))))("field1", "field2"))
-    '(⇑(λ(it1, it2) → ·it1 + ·it2))(field1, field2)'
-    """
-    return call(
-        call("as_fieldop")(
-            *(
-                (
-                    expr,
-                    domain,
-                )
-                if domain
-                else (expr,)
-            )
-        )
-    )
-
-
 def op_as_fieldop(
     op: str | itir.SymRef | Callable, domain: Optional[itir.FunCall] = None
 ) -> Callable[..., itir.FunCall]:
@@ -490,3 +497,8 @@ def op_as_fieldop(
         return as_fieldop(lambda_(*args)(op(*[deref(arg) for arg in args])), domain)(*its)
 
     return _impl
+
+
+def map_(op):
+    """Create a `map_` call."""
+    return call(call("map_")(op))
