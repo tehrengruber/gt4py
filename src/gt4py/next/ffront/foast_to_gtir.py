@@ -10,10 +10,12 @@
 import dataclasses
 from typing import Any, Callable, Optional
 
-from gt4py.eve import NodeTranslator, PreserveLocationVisitor, utils as eve_utils
+from gt4py import eve
+from gt4py.eve import utils as eve_utils
 from gt4py.eve.extended_typing import Never
 from gt4py.next.ffront import (
     dialect_ast_enums,
+    experimental as experimental_builtins,
     fbuiltins,
     field_operator_ast as foast,
     foast_introspection,
@@ -21,8 +23,6 @@ from gt4py.next.ffront import (
     stages as ffront_stages,
     type_specifications as ts_ffront,
 )
-from gt4py.next.ffront.experimental import EXPERIMENTAL_FUN_BUILTIN_NAMES
-from gt4py.next.ffront.fbuiltins import FUN_BUILTIN_NAMES, MATH_BUILTIN_NAMES, TYPE_BUILTIN_NAMES
 from gt4py.next.iterator import ir as itir
 from gt4py.next.iterator.ir_utils import ir_makers as im
 from gt4py.next.type_system import type_info, type_specifications as ts
@@ -39,12 +39,15 @@ def promote_to_list(node: foast.Symbol | foast.Expr) -> Callable[[itir.Expr], it
 
 
 @dataclasses.dataclass
-class FieldOperatorLowering(PreserveLocationVisitor, NodeTranslator):
+class FieldOperatorLowering(eve.PreserveLocationVisitor, eve.NodeTranslator):
     """
-    Lower FieldOperator AST (FOAST) to Iterator IR (ITIR).
+    Lower FieldOperator AST (FOAST) to GTIR.
 
-    The strategy is to lower every expression to lifted stencils,
-    i.e. taking iterators and returning iterator.
+    Most expressions are lowered to `as_fieldop`ed stencils.
+    Pure scalar expressions are kept as scalar operations as they might appear outside of the stencil context,
+    e.g. in `cond`.
+    In arithemtic operations that involve a field and a scalar, the scalar is implicitly broadcasted to a field
+    in the `as_fieldop` call.
 
     Examples
     --------
@@ -86,10 +89,8 @@ class FieldOperatorLowering(PreserveLocationVisitor, NodeTranslator):
     ) -> itir.FunctionDefinition:
         func_definition: itir.FunctionDefinition = self.visit(node.definition, **kwargs)
 
-        new_body = func_definition.expr
-
         return itir.FunctionDefinition(
-            id=func_definition.id, params=func_definition.params, expr=new_body
+            id=func_definition.id, params=func_definition.params, expr=func_definition.expr
         )
 
     def visit_ScanOperator(
@@ -128,7 +129,7 @@ class FieldOperatorLowering(PreserveLocationVisitor, NodeTranslator):
         common_symbols: dict[str, foast.Symbol] = node.annex.propagated_symbols
 
         if return_kind is foast_introspection.StmtReturnKind.NO_RETURN:
-            # TODO document why this case should be handled in this way, not by the more general CONDITIONAL_RETURN
+            # FIXME[#1582](havogt): document why this case should be handled in this way, not by the more general CONDITIONAL_RETURN
 
             # pack the common symbols into a tuple
             common_symrefs = im.make_tuple(*(im.ref(sym) for sym in common_symbols.keys()))
@@ -241,14 +242,14 @@ class FieldOperatorLowering(PreserveLocationVisitor, NodeTranslator):
     def visit_Call(self, node: foast.Call, **kwargs: Any) -> itir.Expr:
         if type_info.type_class(node.func.type) is ts.FieldType:
             return self._visit_shift(node, **kwargs)
-        elif isinstance(node.func, foast.Name) and node.func.id in MATH_BUILTIN_NAMES:
+        elif isinstance(node.func, foast.Name) and node.func.id in fbuiltins.MATH_BUILTIN_NAMES:
             return self._visit_math_built_in(node, **kwargs)
         elif isinstance(node.func, foast.Name) and node.func.id in (
-            FUN_BUILTIN_NAMES + EXPERIMENTAL_FUN_BUILTIN_NAMES
+            fbuiltins.FUN_BUILTIN_NAMES + experimental_builtins.EXPERIMENTAL_FUN_BUILTIN_NAMES
         ):
             visitor = getattr(self, f"_visit_{node.func.id}")
             return visitor(node, **kwargs)
-        elif isinstance(node.func, foast.Name) and node.func.id in TYPE_BUILTIN_NAMES:
+        elif isinstance(node.func, foast.Name) and node.func.id in fbuiltins.TYPE_BUILTIN_NAMES:
             return self._visit_type_constr(node, **kwargs)
         elif isinstance(
             node.func.type,
@@ -285,26 +286,23 @@ class FieldOperatorLowering(PreserveLocationVisitor, NodeTranslator):
                 im.lambda_("__val")(im.call("cast_")(im.deref("__val"), str(new_type)))
             )(expr)
 
-        if not isinstance(node.type, ts.TupleType):
+        if not isinstance(node.type, ts.TupleType):  # to keep the IR simpler
             return create_cast(obj)
 
         return lowering_utils.process_elements(create_cast, obj, node.type)
 
     def _visit_where(self, node: foast.Call, **kwargs: Any) -> itir.FunCall:
-        if not isinstance(node.type, ts.TupleType):
+        if not isinstance(node.type, ts.TupleType):  # to keep the IR simpler
             return im.op_as_fieldop("if_")(*self.visit(node.args))
 
         cond_ = self.visit(node.args[0])
         cond_symref_name = f"__cond_{eve_utils.content_hash(cond_)}"
 
-        def create_if(cond: itir.Expr) -> Callable[[itir.Expr, itir.Expr], itir.FunCall]:
-            def create_if_impl(true_: itir.Expr, false_: itir.Expr) -> itir.FunCall:
-                return im.op_as_fieldop("if_")(cond, true_, false_)
-
-            return create_if_impl
+        def create_if(true_: itir.Expr, false_: itir.Expr) -> itir.FunCall:
+            return im.op_as_fieldop("if_")(im.ref(cond_symref_name), true_, false_)
 
         result = lowering_utils.process_elements(
-            create_if(im.ref(cond_symref_name)),
+            create_if,
             (self.visit(node.args[1]), self.visit(node.args[2])),
             node.type,
         )
@@ -357,6 +355,10 @@ class FieldOperatorLowering(PreserveLocationVisitor, NodeTranslator):
         )
 
     def _make_literal(self, val: Any, type_: ts.TypeSpec) -> itir.Expr:
+        if isinstance(type_, ts.TupleType):
+            return im.make_tuple(
+                *(self._make_literal(val, type_) for val, type_ in zip(val, type_.types))
+            )
         if isinstance(type_, ts.ScalarType):
             typename = type_.kind.name.lower()
             return im.literal(str(val), typename)

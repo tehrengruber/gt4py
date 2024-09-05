@@ -33,7 +33,7 @@ from gt4py.next.type_system import type_info, type_specifications as ts
 
 @dataclasses.dataclass(frozen=True)
 class PastToItir(workflow.ChainableWorkflowMixin):
-    to_gtir: bool = False
+    to_gtir: bool = False  # FIXME[#1582](havogt): remove after refactoring to GTIR
     transforms_fop: Any = None
 
     def __call__(self, inp: ffront_stages.PastClosure) -> stages.ProgramCall:
@@ -152,7 +152,7 @@ class ProgramLowering(
     """
 
     grid_type: common.GridType
-    to_gtir: bool = False  # TODO(havogt): remove after refactoring to GTIR
+    to_gtir: bool = False  # FIXME[#1582](havogt): remove after refactoring to GTIR
 
     # TODO(tehrengruber): enable doctests again. For unknown / obscure reasons
     #  the above doctest fails when executed using `pytest --doctest-modules`.
@@ -163,7 +163,7 @@ class ProgramLowering(
         node: past.Program,
         function_definitions: list[itir.FunctionDefinition],
         grid_type: common.GridType,
-        to_gtir: bool = False,
+        to_gtir: bool = False,  # FIXME[#1582](havogt): remove after refactoring to GTIR
     ) -> itir.FencilDefinition:
         return cls(grid_type=grid_type, to_gtir=to_gtir).visit(
             node, function_definitions=function_definitions
@@ -249,6 +249,7 @@ class ProgramLowering(
             target=output,
         )
 
+    # FIXME[#1582](havogt): remove after refactoring to GTIR
     def _visit_stencil_call_as_closure(self, node: past.Call, **kwargs: Any) -> itir.StencilClosure:
         assert isinstance(node.kwargs["out"].type, ts.TypeSpec)
         assert type_info.is_type_or_tuple_of_type(node.kwargs["out"].type, ts.FieldType)

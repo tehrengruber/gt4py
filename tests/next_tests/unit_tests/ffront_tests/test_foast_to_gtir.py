@@ -15,6 +15,7 @@ import numpy as np
 import pytest
 
 import gt4py.next as gtx
+from gt4py.eve import utils as eve_utils
 from gt4py.next import (
     astype,
     broadcast,
@@ -33,11 +34,9 @@ from gt4py.next.ffront.experimental import as_offset
 from gt4py.next.ffront.fbuiltins import exp, minimum
 from gt4py.next.ffront.foast_to_gtir import FieldOperatorLowering
 from gt4py.next.ffront.func_to_foast import FieldOperatorParser
-from gt4py.next.iterator import ir as itir
 from gt4py.next.iterator.ir_utils import ir_makers as im
-from gt4py.next.iterator.transforms import collapse_tuple, inline_lambdas
-from gt4py.next.iterator.type_system import type_specifications as it_ts
-from gt4py.next.type_system import type_info, type_specifications as ts, type_translation
+from gt4py.next.iterator.transforms import inline_lambdas
+from gt4py.next.type_system import type_specifications as ts, type_translation
 
 
 Edge = gtx.Dimension("Edge")
@@ -76,7 +75,6 @@ def test_field_and_scalar_arg():
     def foo(bar: gtx.Field[[TDim], int64], alpha: int64) -> gtx.Field[[TDim], int64]:
         return alpha * bar
 
-    # TODO document that scalar arguments of `as_fieldop(stencil)` are promoted to 0-d fields
     parsed = FieldOperatorParser.apply_to_function(foo)
     lowered = FieldOperatorLowering.apply(parsed)
 
@@ -97,7 +95,7 @@ def test_scalar_arg_only():
     assert lowered.expr == reference
 
 
-def test_multicopy():
+def test_multivalue_identity():
     def foo(inp1: gtx.Field[[TDim], float64], inp2: gtx.Field[[TDim], float64]):
         return inp1, inp2
 
@@ -326,7 +324,6 @@ def test_astype_nested_tuple():
     assert lowered_inlined.expr == reference
 
 
-# TODO (introduce neg/pos)
 def test_unary_minus():
     def foo(inp: gtx.Field[[TDim], float64]):
         return -inp
@@ -500,6 +497,23 @@ def test_add_scalar_literals():
     assert lowered.expr == reference
 
 
+def test_literal_tuple():
+    tup = eve_utils.FrozenNamespace(a=(4, 2))
+
+    def foo():
+        return tup.a
+
+    parsed = FieldOperatorParser.apply_to_function(foo)
+    lowered = FieldOperatorLowering.apply(parsed)
+
+    reference = im.make_tuple(
+        im.literal("4", "int32"),
+        im.literal("2", "int32"),
+    )
+
+    assert lowered.expr == reference
+
+
 def test_binary_mult():
     def foo(a: gtx.Field[[TDim], float64], b: gtx.Field[[TDim], float64]):
         return a * b
@@ -600,10 +614,10 @@ def test_compare_gt():
 
 
 def test_compare_lt():
-    def comp_lt(a: gtx.Field[[TDim], float64], b: gtx.Field[[TDim], float64]):
+    def foo(a: gtx.Field[[TDim], float64], b: gtx.Field[[TDim], float64]):
         return a < b
 
-    parsed = FieldOperatorParser.apply_to_function(comp_lt)
+    parsed = FieldOperatorParser.apply_to_function(foo)
     lowered = FieldOperatorLowering.apply(parsed)
 
     reference = im.op_as_fieldop("less")("a", "b")
