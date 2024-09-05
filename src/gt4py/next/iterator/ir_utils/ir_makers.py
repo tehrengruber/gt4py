@@ -472,6 +472,29 @@ def domain(
     )
 
 
+def as_fieldop(expr: itir.Expr, domain: Optional[itir.FunCall] = None) -> call:
+    """
+    Create an `as_fieldop` call.
+
+    Examples
+    --------
+    >>> str(as_fieldop(lambda_("it1", "it2")(plus(deref("it1"), deref("it2"))))("field1", "field2"))
+    '(⇑(λ(it1, it2) → ·it1 + ·it2))(field1, field2)'
+    """
+    return call(
+        call("as_fieldop")(
+            *(
+                (
+                    expr,
+                    domain,
+                )
+                if domain
+                else (expr,)
+            )
+        )
+    )
+
+
 def op_as_fieldop(
     op: str | itir.SymRef | Callable, domain: Optional[itir.FunCall] = None
 ) -> Callable[..., itir.FunCall]:
