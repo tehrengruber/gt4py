@@ -120,14 +120,12 @@ def fencil_generator(
         # TODO should not be here
         ir = inline_fundefs.InlineFundefs().visit(ir)
         ir = inline_lambdas.InlineLambdas.apply(ir, opcount_preserving=True)
-        try:
-            ir = collapse_tuple.CollapseTuple.apply(
-                ir
-            )  # uses type inference and therefore should only run after domain propagation, but makes some simple cases work for now
-        except:
-            ...
         print(ir)
         ir = infer_domain.infer_program(ir, offset_provider=offset_provider)
+        ir = collapse_tuple.CollapseTuple.apply(
+            ir,
+            offset_provider=offset_provider
+        )  # uses type inference and therefore should only run after domain propagation, but makes some simple cases work for now
     else:
         ir = itir_transforms.apply_common_transforms(
             ir, lift_mode=lift_mode, offset_provider=offset_provider
