@@ -7,7 +7,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 import typing
-from typing import Callable, Optional, Union
+from typing import Any, Callable, Optional, Union
 
 from gt4py._core import definitions as core_defs
 from gt4py.next import common
@@ -38,7 +38,9 @@ def sym(sym_or_name: Union[str, itir.Sym], type_: str | ts.TypeSpec | None = Non
 
 
 def ref(
-    ref_or_name: Union[str, itir.SymRef], type_: str | ts.TypeSpec | None = None
+    ref_or_name: Union[str, itir.SymRef],
+    type_: str | ts.TypeSpec | None = None,
+    annex: dict[str, Any] | None = None,
 ) -> itir.SymRef:
     """
     Convert to SymRef if necessary.
@@ -57,8 +59,13 @@ def ref(
     """
     if isinstance(ref_or_name, itir.SymRef):
         assert not type_
+        assert not annex
         return ref_or_name
-    return itir.SymRef(id=ref_or_name, type=ensure_type(type_))
+    ref = itir.SymRef(id=ref_or_name, type=ensure_type(type_))
+    if annex is not None:
+        for key, value in annex.items():
+            setattr(ref.annex, key, value)
+    return ref
 
 
 def ensure_expr(literal_or_expr: Union[str, core_defs.Scalar, itir.Expr]) -> itir.Expr:
@@ -437,7 +444,7 @@ def as_fieldop(expr: itir.Expr | str, domain: Optional[itir.Expr] = None) -> Cal
     >>> str(as_fieldop(lambda_("it1", "it2")(plus(deref("it1"), deref("it2"))))("field1", "field2"))
     '(⇑(λ(it1, it2) → ·it1 + ·it2))(field1, field2)'
     """
-    from gt4py.next.iterator.ir_utils import domain_utils
+    from gt4py.next.iterator.ir_utils import common_pattern_matcher as cpm, domain_utils
 
     result = call(
         call("as_fieldop")(
@@ -454,7 +461,9 @@ def as_fieldop(expr: itir.Expr | str, domain: Optional[itir.Expr] = None) -> Cal
 
     def _populate_domain_annex_wrapper(*args, **kwargs):
         node = result(*args, **kwargs)
-        if domain:
+        # note: if the domain is not a direct construction, e.g. because it is only a reference
+        # to a domain defined in a let, don't populate the annex
+        if domain and cpm.is_call_to(domain, ("cartesian_domain", "unstructured_domain")):
             node.annex.domain = domain_utils.SymbolicDomain.from_expr(domain)
         return node
 

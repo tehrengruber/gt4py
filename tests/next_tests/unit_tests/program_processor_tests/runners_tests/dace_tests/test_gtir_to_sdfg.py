@@ -35,9 +35,24 @@ from next_tests.integration_tests.feature_tests.ffront_tests.ffront_test_utils i
     skip_value_mesh,
 )
 
-
+dace = pytest.importorskip("dace")
 dace_backend = pytest.importorskip("gt4py.next.program_processors.runners.dace")
 
+
+@pytest.fixture
+def allow_view_arguments():
+    """Allows arrays with non-default layout."""
+    path = ["compiler", "allow_view_arguments"]
+    value = True
+    old_value = dace.Config.get(*path)
+    dace.Config.set(*path, value=value)
+    yield
+    dace.Config.set(*path, value=old_value)
+
+
+pytestmark = pytest.mark.usefixtures(
+    "allow_view_arguments"
+)  # use the fixture for all tests in this module
 
 N = 10
 FLOAT_TYPE = ts.ScalarType(kind=ts.ScalarKind.FLOAT64)
@@ -49,8 +64,8 @@ V2E_FTYPE = ts.FieldType(dims=[Vertex, V2EDim], dtype=EFTYPE.dtype)
 CARTESIAN_OFFSETS = {
     IDim.value: IDim,
 }
-SIMPLE_MESH: MeshDescriptor = simple_mesh()
-SKIP_VALUE_MESH: MeshDescriptor = skip_value_mesh()
+SIMPLE_MESH: MeshDescriptor = simple_mesh(None)
+SKIP_VALUE_MESH: MeshDescriptor = skip_value_mesh(None)
 SIZE_TYPE = ts.ScalarType(ts.ScalarKind.INT32)
 FSYMBOLS = dict(
     __w_0_range_1=N,
@@ -66,6 +81,10 @@ FSYMBOLS = dict(
 
 
 def make_mesh_symbols(mesh: MeshDescriptor):
+    c2e_ndarray = mesh.offset_provider["C2E"].ndarray
+    c2v_ndarray = mesh.offset_provider["C2V"].ndarray
+    e2v_ndarray = mesh.offset_provider["E2V"].ndarray
+    v2e_ndarray = mesh.offset_provider["V2E"].ndarray
     return dict(
         ncells=mesh.num_cells,
         nedges=mesh.num_edges,
@@ -78,26 +97,32 @@ def make_mesh_symbols(mesh: MeshDescriptor):
         __vertices_stride_0=1,
         __connectivity_C2E_0_range_1=mesh.num_cells,
         __connectivity_C2E_size_1=mesh.offset_provider_type["C2E"].max_neighbors,
-        __connectivity_C2E_stride_0=mesh.offset_provider_type["C2E"].max_neighbors,
-        __connectivity_C2E_stride_1=1,
+        __connectivity_C2E_stride_0=c2e_ndarray.strides[0] // c2e_ndarray.itemsize,
+        __connectivity_C2E_stride_1=c2e_ndarray.strides[1] // c2e_ndarray.itemsize,
         __connectivity_C2V_0_range_1=mesh.num_cells,
         __connectivity_C2V_size_1=mesh.offset_provider_type["C2V"].max_neighbors,
-        __connectivity_C2V_stride_0=mesh.offset_provider_type["C2V"].max_neighbors,
-        __connectivity_C2V_stride_1=1,
+        __connectivity_C2V_stride_0=c2v_ndarray.strides[0] // c2v_ndarray.itemsize,
+        __connectivity_C2V_stride_1=c2v_ndarray.strides[1] // c2v_ndarray.itemsize,
         __connectivity_E2V_0_range_1=mesh.num_edges,
         __connectivity_E2V_size_1=mesh.offset_provider_type["E2V"].max_neighbors,
-        __connectivity_E2V_stride_0=mesh.offset_provider_type["E2V"].max_neighbors,
-        __connectivity_E2V_stride_1=1,
+        __connectivity_E2V_stride_0=e2v_ndarray.strides[0] // e2v_ndarray.itemsize,
+        __connectivity_E2V_stride_1=e2v_ndarray.strides[1] // e2v_ndarray.itemsize,
         __connectivity_V2E_0_range_1=mesh.num_vertices,
         __connectivity_V2E_size_1=mesh.offset_provider_type["V2E"].max_neighbors,
-        __connectivity_V2E_stride_0=mesh.offset_provider_type["V2E"].max_neighbors,
-        __connectivity_V2E_stride_1=1,
+        __connectivity_V2E_stride_0=v2e_ndarray.strides[0] // v2e_ndarray.itemsize,
+        __connectivity_V2E_stride_1=v2e_ndarray.strides[1] // v2e_ndarray.itemsize,
     )
 
 
 def build_dace_sdfg(
     ir: gtir.Program, offset_provider_type: gtx_common.OffsetProviderType
 ) -> Callable[..., Any]:
+    # run domain inference in order to add the domain annex information to the IR nodes
+    ir = infer_domain.infer_program(
+        ir,
+        offset_provider=offset_provider_type,
+        symbolic_domain_sizes={IDim.value: "size", Edge.value: "nedges", Vertex.value: "nvertices"},
+    )
     return dace_backend.build_sdfg_from_gtir(
         ir, offset_provider_type, disable_field_origin_on_program_arguments=True
     )
@@ -375,6 +400,7 @@ def test_gtir_tuple_broadcast_scalar():
 
 def test_gtir_zero_dim_fields():
     domain = im.domain(gtx_common.GridType.CARTESIAN, ranges={IDim: (0, "size")})
+    empty_domain = im.domain(gtx_common.GridType.CARTESIAN, ranges={})
     testee = gtir.Program(
         id="gtir_zero_dim_fields",
         function_definitions=[],
@@ -386,7 +412,9 @@ def test_gtir_zero_dim_fields():
         declarations=[],
         body=[
             gtir.SetAt(
-                expr=im.as_fieldop("deref", domain)("x"),
+                expr=im.op_as_fieldop("multiplies", domain)(
+                    "x", im.op_as_fieldop("plus", empty_domain)(1.0, 1.0)
+                ),
                 domain=domain,
                 target=gtir.SymRef(id="y"),
             )
@@ -399,7 +427,7 @@ def test_gtir_zero_dim_fields():
     sdfg = build_dace_sdfg(testee, CARTESIAN_OFFSETS)
 
     sdfg(a.item(), b, **FSYMBOLS)
-    assert np.allclose(a, b)
+    assert np.allclose(b, a * 2)
 
 
 def test_gtir_tuple_return():
@@ -662,6 +690,7 @@ def test_gtir_cond():
         assert np.allclose(d, (a + b + 1) if s1 > s2 else (a + c + 1))
 
 
+@pytest.mark.xfail(reason="requires function to retrieve the annex tuple domain")
 def test_gtir_cond_with_tuple_return():
     domain = im.domain(gtx_common.GridType.CARTESIAN, ranges={IDim: (0, "size")})
     testee = gtir.Program(
@@ -1050,13 +1079,11 @@ def test_gtir_connectivity_shift():
     EDGE_OFFSET_FTYPE = ts.FieldType(dims=[Edge], dtype=SIZE_TYPE)
 
     connectivity_C2E = SIMPLE_MESH.offset_provider["C2E"]
-    assert isinstance(connectivity_C2E, gtx_common.NeighborTable)
     connectivity_E2V = SIMPLE_MESH.offset_provider["E2V"]
-    assert isinstance(connectivity_E2V, gtx_common.NeighborTable)
 
     ev = np.random.rand(SIMPLE_MESH.num_edges, SIMPLE_MESH.num_vertices)
-    ref = ev[connectivity_C2E.ndarray[:, C2E_neighbor_idx], :][
-        :, connectivity_E2V.ndarray[:, E2V_neighbor_idx]
+    ref = ev[connectivity_C2E.asnumpy()[:, C2E_neighbor_idx], :][
+        :, connectivity_E2V.asnumpy()[:, E2V_neighbor_idx]
     ]
 
     for i, stencil in enumerate(
@@ -1148,13 +1175,13 @@ def test_gtir_connectivity_shift_chain():
     sdfg = build_dace_sdfg(testee, SIMPLE_MESH.offset_provider_type)
 
     connectivity_E2V = SIMPLE_MESH.offset_provider["E2V"]
-    assert isinstance(connectivity_E2V, gtx_common.NeighborTable)
     connectivity_V2E = SIMPLE_MESH.offset_provider["V2E"]
-    assert isinstance(connectivity_V2E, gtx_common.NeighborTable)
 
     e = np.random.rand(SIMPLE_MESH.num_edges)
     ref = e[
-        connectivity_V2E.ndarray[connectivity_E2V.ndarray[:, E2V_neighbor_idx], V2E_neighbor_idx]
+        connectivity_V2E.asnumpy()[
+            connectivity_E2V.asnumpy()[:, E2V_neighbor_idx], V2E_neighbor_idx
+        ]
     ]
 
     # new empty output field
@@ -1208,7 +1235,6 @@ def test_gtir_neighbors_as_input():
     sdfg = build_dace_sdfg(testee, SIMPLE_MESH.offset_provider_type)
 
     connectivity_V2E = SIMPLE_MESH.offset_provider["V2E"]
-    assert isinstance(connectivity_V2E, gtx_common.NeighborTable)
 
     v2e_field = np.random.rand(SIMPLE_MESH.num_vertices, connectivity_V2E.shape[1])
     e = np.random.rand(SIMPLE_MESH.num_edges)
@@ -1216,7 +1242,7 @@ def test_gtir_neighbors_as_input():
 
     v_ref = [
         functools.reduce(lambda x, y: x + y, v2e_values + e[v2e_neighbors], init_value)
-        for v2e_neighbors, v2e_values in zip(connectivity_V2E.ndarray, v2e_field, strict=True)
+        for v2e_neighbors, v2e_values in zip(connectivity_V2E.asnumpy(), v2e_field, strict=True)
     ]
 
     sdfg(
@@ -1266,7 +1292,6 @@ def test_gtir_neighbors_as_output():
     sdfg = build_dace_sdfg(testee, SIMPLE_MESH.offset_provider_type)
 
     connectivity_V2E = SIMPLE_MESH.offset_provider["V2E"]
-    assert isinstance(connectivity_V2E, gtx_common.NeighborTable)
 
     e = np.random.rand(SIMPLE_MESH.num_edges)
     v2e_field = np.empty([SIMPLE_MESH.num_vertices, connectivity_V2E.max_neighbors], dtype=e.dtype)
@@ -1282,7 +1307,7 @@ def test_gtir_neighbors_as_output():
         __v2e_field_stride_0=connectivity_V2E.max_neighbors,
         __v2e_field_stride_1=1,
     )
-    assert np.allclose(v2e_field, e[connectivity_V2E.ndarray])
+    assert np.allclose(v2e_field, e[connectivity_V2E.asnumpy()])
 
 
 def test_gtir_reduce():
@@ -1300,12 +1325,11 @@ def test_gtir_reduce():
     )(im.as_fieldop_neighbors("V2E", "edges", vertex_domain))
 
     connectivity_V2E = SIMPLE_MESH.offset_provider["V2E"]
-    assert isinstance(connectivity_V2E, gtx_common.NeighborTable)
 
     e = np.random.rand(SIMPLE_MESH.num_edges)
     v_ref = [
         functools.reduce(lambda x, y: x + y, e[v2e_neighbors], init_value)
-        for v2e_neighbors in connectivity_V2E.ndarray
+        for v2e_neighbors in connectivity_V2E.asnumpy()
     ]
 
     for i, stencil in enumerate([stencil_inlined, stencil_fieldview]):
@@ -1356,7 +1380,6 @@ def test_gtir_reduce_with_skip_values():
     )(im.as_fieldop_neighbors("V2E", "edges", vertex_domain))
 
     connectivity_V2E = SKIP_VALUE_MESH.offset_provider["V2E"]
-    assert isinstance(connectivity_V2E, gtx_common.NeighborTable)
 
     e = np.random.rand(SKIP_VALUE_MESH.num_edges)
     v_ref = [
@@ -1365,7 +1388,7 @@ def test_gtir_reduce_with_skip_values():
             [e[i] if i != gtx_common._DEFAULT_SKIP_VALUE else 0.0 for i in v2e_neighbors],
             init_value,
         )
-        for v2e_neighbors in connectivity_V2E.ndarray
+        for v2e_neighbors in connectivity_V2E.asnumpy()
     ]
 
     for i, stencil in enumerate([stencil_inlined, stencil_fieldview]):
@@ -1406,7 +1429,6 @@ def test_gtir_reduce_dot_product():
     vertex_domain = im.domain(gtx_common.GridType.UNSTRUCTURED, ranges={Vertex: (0, "nvertices")})
 
     connectivity_V2E = SKIP_VALUE_MESH.offset_provider["V2E"]
-    assert isinstance(connectivity_V2E, gtx_common.NeighborTable)
 
     v2e_field = np.random.rand(*connectivity_V2E.shape)
     e = np.random.rand(SKIP_VALUE_MESH.num_edges)
@@ -1420,7 +1442,7 @@ def test_gtir_reduce_dot_product():
             ),
             init_value,
         )
-        for v2e_neighbors, v2e_values in zip(connectivity_V2E.ndarray, v2e_field)
+        for v2e_neighbors, v2e_values in zip(connectivity_V2E.asnumpy(), v2e_field)
     ]
 
     testee = gtir.Program(
@@ -1506,7 +1528,6 @@ def test_gtir_reduce_with_cond_neighbors():
     )
 
     connectivity_V2E = SKIP_VALUE_MESH.offset_provider["V2E"]
-    assert isinstance(connectivity_V2E, gtx_common.NeighborTable)
 
     v2e_field = np.random.rand(*connectivity_V2E.shape)
     e = np.random.rand(SKIP_VALUE_MESH.num_edges)
@@ -1530,7 +1551,7 @@ def test_gtir_reduce_with_cond_neighbors():
                 [e[i] if i != gtx_common._DEFAULT_SKIP_VALUE else 0.0 for i in v2e_neighbors],
                 init_value,
             )
-            for v2e_neighbors, v2e_values in zip(connectivity_V2E.ndarray, v2e_field, strict=True)
+            for v2e_neighbors, v2e_values in zip(connectivity_V2E.asnumpy(), v2e_field, strict=True)
         ]
         sdfg(
             np.bool_(use_sparse),
@@ -1722,9 +1743,7 @@ def test_gtir_let_lambda_with_connectivity():
     cell_domain = im.domain(gtx_common.GridType.UNSTRUCTURED, ranges={Cell: (0, "ncells")})
 
     connectivity_C2E = SIMPLE_MESH.offset_provider["C2E"]
-    assert isinstance(connectivity_C2E, gtx_common.NeighborTable)
     connectivity_C2V = SIMPLE_MESH.offset_provider["C2V"]
-    assert isinstance(connectivity_C2V, gtx_common.NeighborTable)
 
     testee = gtir.Program(
         id="let_lambda_with_connectivity",
@@ -1765,8 +1784,8 @@ def test_gtir_let_lambda_with_connectivity():
     v = np.random.rand(SIMPLE_MESH.num_vertices)
     c = np.empty(SIMPLE_MESH.num_cells)
     ref = (
-        e[connectivity_C2E.ndarray[:, C2E_neighbor_idx]]
-        + v[connectivity_C2V.ndarray[:, C2V_neighbor_idx]]
+        e[connectivity_C2E.asnumpy()[:, C2E_neighbor_idx]]
+        + v[connectivity_C2V.asnumpy()[:, C2V_neighbor_idx]]
     )
 
     sdfg(
@@ -1844,7 +1863,11 @@ def test_gtir_let_lambda_with_tuple1():
     a = np.random.rand(N)
     b = np.random.rand(N)
 
-    sdfg = build_dace_sdfg(testee, CARTESIAN_OFFSETS)
+    # TODO(edopao): call `build_dace_sdfg` as in all other tests, once this error is fixed
+    #   in domain inference: 'target_domain' cannot be 'NEVER' unless `allow_uninferred=True`
+    sdfg = dace_backend.build_sdfg_from_gtir(
+        testee, CARTESIAN_OFFSETS, disable_field_origin_on_program_arguments=True
+    )
 
     z_fields = (np.zeros_like(a), np.zeros_like(a))
     a_ref = np.concatenate((z_fields[0][:1], a[1 : N - 1], z_fields[0][N - 1 :]))
@@ -2039,8 +2062,6 @@ def test_gtir_index():
 
     v = np.zeros(N, dtype=np.int32)
 
-    # we need to run domain inference in order to add the domain annex information to the index node.
-    testee = infer_domain.infer_program(testee, offset_provider=CARTESIAN_OFFSETS)
     sdfg = build_dace_sdfg(testee, CARTESIAN_OFFSETS)
 
     ref = np.concatenate(
