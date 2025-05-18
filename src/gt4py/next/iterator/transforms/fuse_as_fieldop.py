@@ -397,6 +397,7 @@ class FuseAsFieldOp(
         return None
 
     def transform_inline_let_vars_opcount_preserving(self, node: itir.Node, **kwargs):
+        return None
         # when multiple `as_fieldop` calls are fused that use the same argument, this argument
         # might become referenced once only. In order to be able to continue fusing such arguments
         # try inlining here.

@@ -145,6 +145,7 @@ class Backend(Generic[core_defs.DeviceTypeT]):
     executor: workflow.Workflow[stages.CompilableProgram, stages.CompiledProgram]
     allocator: next_allocators.FieldBufferAllocatorProtocol[core_defs.DeviceTypeT]
     transforms: workflow.Workflow[INPUT_PAIR, stages.CompilableProgram]
+    _cache: dict = dataclasses.field(default_factory=dict)
 
     def __call__(
         self,
@@ -154,7 +155,11 @@ class Backend(Generic[core_defs.DeviceTypeT]):
     ) -> None:
         if not isinstance(program, IT_PRG):
             args, kwargs = signature.convert_to_positional(program, *args, **kwargs)
-        self.jit(program, *args, **kwargs)(*args, **kwargs)
+        try:
+            cprg = self._cache[id(program)]
+        except:
+            cprg = self._cache[id(program)] = self.jit(program, *args, **kwargs)
+        return cprg(*args, **kwargs)
 
     def jit(self, program: INPUT_DATA, *args: Any, **kwargs: Any) -> stages.CompiledProgram:
         if not isinstance(program, IT_PRG):
