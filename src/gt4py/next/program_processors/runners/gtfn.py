@@ -103,37 +103,47 @@ def extract_connectivity_args(
     return args
 
 
-class FileCache(diskcache.Cache):
-    """
-    This class extends `diskcache.Cache` to ensure the cache is properly
-    - opened when accessed by multiple processes using a file lock. This guards the creating of the
-    cache object, which has been reported to cause `sqlite3.OperationalError: database is locked`
-    errors and slow startup times when multiple processes access the cache concurrently. While this
-    issue occurred frequently and was observed to be fixed on distributed file systems, the lock
-    does not guarantee correct behavior in particular for accesses to the cache (beyond opening)
-    since the underlying SQLite database is unreliable when stored on an NFS based file system.
-    It does however ensure correctness of concurrent cache accesses on a local file system. See
-    #1745 for more details.
-    - closed upon deletion, i.e. it ensures that any resources associated with the cache are
-    properly released when the instance is garbage collected.
-    """
+import pickle
+from pathlib import Path
+from filelock import FileLock
 
-    def __init__(self, directory: Optional[str | pathlib.Path] = None, **settings: Any) -> None:
-        if directory:
-            lock_dir = pathlib.Path(directory).parent
-        else:
-            lock_dir = pathlib.Path(tempfile.gettempdir())
+class FileCache:
+    def __init__(self, root_path):
+        self.root = Path(root_path)
+        self.root.mkdir(parents=True, exist_ok=True)
 
-        lock_dir.mkdir(parents=True, exist_ok=True)
-        with locking.lock(lock_dir):
-            super().__init__(directory=directory, **settings)
+    def _get_path(self, key):
+        """Convert a key (string or tuple) into a file path."""
+        if isinstance(key, str):
+            key = key.strip("/").split("/")
+        path = self.root.joinpath(*key).with_suffix(".pkl")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        return path
 
-        self._init_complete = True
+    def _lock(self, key):
+        """Return a FileLock object for a given key."""
+        return FileLock(str(self._get_path(key)) + ".lock")
 
-    def __del__(self) -> None:
-        if getattr(self, "_init_complete", False):  # skip if `__init__` didn't finished
-            self.close()
+    def __getitem__(self, key):
+        if key not in self:
+            raise KeyError(key)
+        with self._lock(key):
+            with open(self._get_path(key), "rb") as f:
+                return pickle.load(f)
 
+    def __setitem__(self, key, value):
+        with self._lock(key):
+            with open(self._get_path(key), "wb") as f:
+                pickle.dump(value, f, protocol=pickle.HIGHEST_PROTOCOL)
+
+    def __delitem__(self, key):
+        if key not in self:
+            raise KeyError(key)
+        with self._lock(key):
+            self._get_path(key).unlink()
+
+    def __contains__(self, key):
+        return self._get_path(key).exists()
 
 class GTFNCompileWorkflowFactory(factory.Factory):
     class Meta:
