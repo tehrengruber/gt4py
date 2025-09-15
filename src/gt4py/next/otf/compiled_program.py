@@ -38,6 +38,8 @@ class _CompiledProgramsKey:
         assert common.is_offset_provider_type(self.offset_provider_type)
         return hash((self.values, frozenset(self.offset_provider_type.items())))
 
+def fast_offset_provider_hashable(offset_provider: common.OffsetProvider):
+    return tuple((k, id(v)) for (k, v) in offset_provider.items())
 
 def _validate_types(
     program_name: str,
@@ -157,9 +159,9 @@ class CompiledProgramsPool:
         it is an error.
         """
         args, kwargs = type_info.canonicalize_arguments(self.program_type, args, kwargs)
-        offset_provider_type = _offset_provider_to_type_unsafe(offset_provider)
+        offset_provider_hash = fast_offset_provider_hashable(offset_provider)
         static_args_values = tuple(args[i] for i in self._static_arg_indices)
-        key = _CompiledProgramsKey(static_args_values, offset_provider_type)
+        key = (static_args_values, offset_provider_hash)
         try:
             self._compiled_programs[key](*args, **kwargs, offset_provider=offset_provider)  # type: ignore[operator] # for performance: try to call first...
         except TypeError:  # 'Future' object is not callable
@@ -205,15 +207,13 @@ class CompiledProgramsPool:
             for name, type_ in self.program_type.definition.pos_or_kw_args.items()
         )
 
-        key = _CompiledProgramsKey(
+        key = (
             tuple(static_args[p] for p in self.static_params),
-            # TODO(tehrengruber): This is wrong
-            offset_provider
-            if common.is_offset_provider_type(offset_provider)
-            else common.offset_provider_to_type(offset_provider),
+            fast_offset_provider_hashable(offset_provider)
         )
         if key in self._compiled_programs:
-            raise ValueError(f"Program with key {key} already exists.")
+            return
+            #raise ValueError(f"Program with key {key} already exists.")
 
         # TODO: this can be the key
         compile_time_args = arguments.CompileTimeArgs(
@@ -222,6 +222,8 @@ class CompiledProgramsPool:
             args=args,
             kwargs={},
         )
+        definition = self.definition_stage.definition
+        print(f"Compiling '{definition.__module__}.{definition.__qualname__}'", flush=True)
         self._compiled_programs[key] = _async_compilation_pool.submit(
             self.backend.compile, self.definition_stage, compile_time_args=compile_time_args
         )
