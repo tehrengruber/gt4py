@@ -63,9 +63,28 @@ class CompiledProgramMixin:
         if self.compilation_options.static_params is None:
             object.__setattr__(self.compilation_options, "static_params", ())
 
-        argument_descriptor_mapping = {
-            arguments.StaticArg: self.compilation_options.static_params,
-        }
+        def path_to_expr(path: Sequence[int]) -> str:
+            return "".join(map(lambda idx: f"[{idx}]", path))
+
+        argument_descriptor_mapping: dict[type[arguments.ArgStaticDescriptor], Sequence[str]] = {}
+
+        if self.compilation_options.static_params:
+            argument_descriptor_mapping[
+                arguments.StaticArg] = self.compilation_options.static_params
+
+        if self.compilation_options.static_domains:
+            static_domain_args = []
+            if isinstance(self, Program):
+                func_type = self.past_stage.past_node.type.definition  # type: ignore[union-attr] # type inference done at this point
+                param_types = func_type.pos_or_kw_args | func_type.kw_only_args
+            elif isinstance(self, FieldOperator):
+                def_type = self.__gt_type__().definition
+                param_types = def_type.pos_or_kw_args | def_type.kw_only_args | {"out": def_type.returns}
+            for name, type_ in param_types.items():
+                for el_type_, path in type_info.primitive_constituents(type_, with_path_arg=True):
+                    if isinstance(el_type_, ts.FieldType):
+                        static_domain_args.append(f"{name}{path_to_expr(path)}")
+            argument_descriptor_mapping[arguments.FieldDomainDescriptor] = static_domain_args
 
         return compiled_program.CompiledProgramsPool(
             backend=self.backend,
@@ -520,6 +539,7 @@ def program(
     grid_type: common.GridType | None,
     enable_jit: bool | None,
     static_params: Sequence[str] | None,
+    static_domains: bool,
     frozen: bool,
 ) -> Callable[[types.FunctionType], Program]: ...
 

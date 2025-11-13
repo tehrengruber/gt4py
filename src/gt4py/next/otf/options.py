@@ -15,6 +15,7 @@ from gt4py.next import common, config
 class CompilationOptionsArgs(TypedDict, total=False):
     enable_jit: bool
     static_params: Sequence[str]
+    static_domains: bool
     connectivities: common.OffsetProvider
 
 
@@ -25,6 +26,7 @@ class CompilationOptions:
     static_params: Sequence[str] | None = (
         None  # TODO: describe that this value will eventually be a sequence of strings
     )
+    static_domains: bool = False
     # TODO(ricoh): replace with common.OffsetProviderType once the temporary pass doesn't require the runtime information
     #: A dictionary holding static/compile-time information about the offset providers.
     #: For now, it is used for ahead of time compilation in DaCe orchestrated programs,
